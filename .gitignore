@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+build/
+work/
+toolchain.local.json
+/outputs/
+/research/
+*.jks
+*.keystore
+*.pfx
