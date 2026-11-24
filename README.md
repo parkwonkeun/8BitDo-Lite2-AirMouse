@@ -1,10 +1,10 @@
-# Lite2 AirMouse
+# 8BitDo Lite 2 AirMouse
 
 8BitDo Lite 2를 평소처럼 양손으로 잡고 Android 화면을 가리키는 에어마우스로 사용할 수 있습니다. 상단 스위치를 **S**에 두면 자이로·스틱 마우스와 키보드가 되고, **D**에 두면 기존 게임패드로 돌아갑니다. S 모드의 기본 마우스는 앱 없이도 작동합니다.
 
 **처음 설치할 때는 두 가지를 기억하세요. 펌웨어는 반드시 D 모드에서 Windows PC에 USB로 연결해 업데이트합니다. 업데이트 후 Android에는 S 모드와 D 모드를 각각 한 번씩 블루투스에 등록합니다.**
 
-[최신 릴리스와 다운로드](https://github.com/parkwonkeun/lite2-airmouse/releases/latest) · [소스에서 빌드하기](docs/BUILD.md)
+[최신 릴리스와 다운로드](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/latest) · [소스에서 빌드하기](docs/BUILD.md)
 
 r33은 가속도계와 자이로로 중력 방향을 추정합니다. 패드를 눕히거나 세워 잡아도 바닥에서 하늘로 향하는 축을 중심으로 돌리면 커서가 좌우로 움직입니다. 공개 펌웨어에는 네 스틱 축의 기본 중립값만 들어 있습니다.
 
@@ -12,9 +12,9 @@ r33은 가속도계와 자이로로 중력 방향을 추정합니다. 패드를 
 
 | 원하는 작업 | 받을 파일 |
 | --- | --- |
-| Lite 2 펌웨어 업데이트 | [Windows 업데이트 키트](https://github.com/parkwonkeun/lite2-airmouse/releases/download/r33-app-0.3.15/Lite2AirMouse-r33-Windows-x64.zip) |
-| Android에서 슬롯·감도·버튼 모니터 사용 | [Android 키트 (APK, ARM64 입력 도우미, Windows 시작 프로그램)](https://github.com/parkwonkeun/lite2-airmouse/releases/download/r33-app-0.3.15/Lite2Control-0.3.15-Android-arm64.zip) |
-| 이미 도우미를 사용 중인 기기에서 앱만 설치 | [Lite 2 Control 0.3.15 APK](https://github.com/parkwonkeun/lite2-airmouse/releases/download/r33-app-0.3.15/Lite2Control-0.3.15.apk) |
+| Lite 2 펌웨어 업데이트 | [Windows 업데이트 키트](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r33-app-0.3.15/Lite2AirMouse-r33-Windows-x64.zip) |
+| Android에서 슬롯·감도·버튼 모니터 사용 | [Android 키트 (APK, ARM64 입력 도우미, Windows 시작 프로그램)](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r33-app-0.3.15/Lite2Control-0.3.15-Android-arm64.zip) |
+| 이미 도우미를 사용 중인 기기에서 앱만 설치 | [Lite 2 Control 0.3.15 APK](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r33-app-0.3.15/Lite2Control-0.3.15.apk) |
 
 ## 1. D 모드 USB로 펌웨어 업데이트
 
