@@ -1,6 +1,7 @@
 package local.lite2.control;
 
 import android.content.SharedPreferences;
+import android.media.AudioManager;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -13,15 +14,22 @@ final class Profiles {
     static final String[] ACTIONS = {
         "기본 입력","미할당","왼클릭","우클릭","가운데 클릭","휠 위","휠 아래",
         "Enter","뒤로","홈","화살표 위","화살표 아래","화살표 왼쪽","화살표 오른쪽",
-        "포인터 모드 전환","자이로 영점","다음 슬롯","슬롯 1","슬롯 2","슬롯 3",
+        "포인터 모드 전환","","다음 슬롯","슬롯 1","슬롯 2","슬롯 3",
         "게임패드 A","게임패드 B","게임패드 X","게임패드 Y","십자키 위","십자키 아래",
         "십자키 왼쪽","십자키 오른쪽","게임패드 LB","게임패드 RB","게임패드 LT","게임패드 RT",
-        "게임패드 L3","게임패드 R3","Start","Select","Capture","게임패드 Home","이전 슬롯"
+        "게임패드 L3","게임패드 R3","Start","Select","Capture","게임패드 Home","이전 슬롯","볼륨 올리기","볼륨 내리기"
     };
     static final String[] CURVES = {"균형", "초반 빠르게", "초반 느리게", "직선", "직접 그리기"};
     static final int NO_CHANGE = -2, RAW = -1, SLOT_COUNT = 3;
     static final int MAX_GYRO_PERCENT = 500;
-    static final int NEXT_SLOT = 16, PREVIOUS_SLOT = ACTIONS.length-1;
+    // Action IDs are stored in existing slots. Keep the removed gyro-zero ID reserved.
+    static final int OLD_GYRO_ZERO=15, NEXT_SLOT=16, PREVIOUS_SLOT=38, VOLUME_UP=39, VOLUME_DOWN=40;
+    static final int LB=8, RB=9;
+    static int[] assignableActions(boolean airMouse) {
+        return java.util.stream.IntStream.range(0,ACTIONS.length)
+            .filter(id->id!=OLD_GYRO_ZERO && (!airMouse || id<20 || id>=PREVIOUS_SLOT))
+            .toArray();
+    }
     static final int LT=10, RT=11;
     static int targetSlot(int active,int action) {
         if(action==PREVIOUS_SLOT)return active==RAW?SLOT_COUNT-1:active-1;
@@ -32,6 +40,18 @@ final class Profiles {
 
     // Physical scanner bit number to button index used by persisted profiles.
     static final int[] SCAN_BUTTON={14,12,13,15,2,3,7,6,5,4,8,9,1,0,LT,RT,16,17};
+    void applyVolumePresses(Profile profile,int active,int down) {
+        if(active==RAW || profile==null)return;
+        int delta=0;
+        for(int bit=0;bit<SCAN_BUTTON.length;bit++) {
+            if((down&(1<<bit))==0)continue;
+            int action=profile.map[SCAN_BUTTON[bit]];
+            if(action==VOLUME_UP)delta++;
+            if(action==VOLUME_DOWN)delta--;
+        }
+        if(delta!=0)context.getSystemService(AudioManager.class).adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,delta>0?AudioManager.ADJUST_RAISE:AudioManager.ADJUST_LOWER,AudioManager.FLAG_SHOW_UI);
+    }
     static int slotForPresses(Profile profile,int active,int down) {
         int next=NO_CHANGE;
         for(int bit=0;bit<SCAN_BUTTON.length;bit++)if((down&(1<<bit))!=0) {
@@ -85,6 +105,7 @@ final class Profiles {
         }
     }
     static final class Stick {
+        final StickCalibration calibration=new StickCalibration();
         static final int SCALE=10000, STEP=100, MIN=3, MAX=7;
         final int defaultCurve;
         final int[] x=new int[MAX], y=new int[MAX];
@@ -215,7 +236,7 @@ final class Profiles {
             count=n;System.arraycopy(xs,0,x,0,n);System.arraycopy(ys,0,y,0,n);
         }
         JSONObject json() throws JSONException {
-            JSONObject data=new JSONObject().put("curve",curve);
+            JSONObject data=new JSONObject().put("curve",curve).put("calibration",calibration.json());
             JSONArray xs=new JSONArray(),ys=new JSONArray();
             for(int i=0;i<count;i++) {xs.put(x[i]);ys.put(y[i]);}
             data.put("x",xs).put("y",ys);
@@ -224,6 +245,7 @@ final class Profiles {
         }
         void read(JSONObject data) {
             if(data==null)return;
+            calibration.read(data.optJSONArray("calibration"));
             JSONArray xs=data.optJSONArray("x"),ys=data.optJSONArray("y");
             if(xs==null && ys==null) {
                 source=new LegacyCurve();
@@ -273,16 +295,17 @@ final class Profiles {
             airMouse=s;
             left=new Stick(s);right=new Stick(s);
             if (s) {
-                int[] defaults={8,7,3,2,10,11,12,13,1,1,PREVIOUS_SLOT,NEXT_SLOT,14,15,1,1,9,9};
+                int[] defaults={8,7,3,2,10,11,12,13,1,1,PREVIOUS_SLOT,NEXT_SLOT,14,0,1,1,9,9};
                 System.arraycopy(defaults,0,map,0,defaults.length);
 
             }
+            map[LB]=VOLUME_UP;map[RB]=VOLUME_DOWN;
         }
         String encode() {
             try {
                 JSONArray keys=new JSONArray();
                 for (int action:map) keys.put(action);
-                return new JSONObject().put("schema",1).put("triggerSlots",true).put("left",left.json())
+                return new JSONObject().put("schema",1).put("volumeBindings",true).put("triggerSlots",true).put("left",left.json())
                     .put("right",right.json()).put("gyroMax",gyroMax)
                     .put("clickHold",clickHold).put("hold",holdMs).put("buttons",keys).toString();
             } catch(JSONException e) { throw new AssertionError(e); }
@@ -299,8 +322,15 @@ final class Profiles {
                 clickHold=data.optBoolean("clickHold",true);
                 holdMs=limit(data.optInt("hold",holdMs),0,5000);
                 JSONArray keys=data.optJSONArray("buttons");
-                if (keys!=null) for(int i=0;i<map.length;i++)
-                    map[i]=limit(keys.optInt(i,map[i]),0,ACTIONS.length-1);
+                if (keys!=null) for(int i=0;i<map.length;i++) {
+                    int id=keys.optInt(i,map[i]);
+                    map[i]=id<0 || id>=ACTIONS.length || id==OLD_GYRO_ZERO?0:id;
+                }
+                if(!data.optBoolean("volumeBindings") && keys!=null) {
+                    int oldDefault=airMouse?1:0;
+                    if(keys.optInt(LB,-1)==oldDefault)map[LB]=VOLUME_UP;
+                    if(keys.optInt(RB,-1)==oldDefault)map[RB]=VOLUME_DOWN;
+                }
                 if(airMouse && !data.optBoolean("triggerSlots") && keys!=null) {
                     if(keys.optInt(LT,-1)==1)map[LT]=PREVIOUS_SLOT;
                     if(keys.optInt(RT,-1)==1)map[RT]=NEXT_SLOT;

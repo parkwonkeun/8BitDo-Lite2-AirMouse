@@ -5,9 +5,9 @@ from test_arm import Machine, ROOT, STOP
 from unicorn import UC_HOOK_CODE
 from unicorn.arm_const import UC_ARM_REG_R0, UC_ARM_REG_PC, UC_ARM_REG_LR
 
-def wireless_scan(enable_trace_chord=True):
+def wireless_scan(enable_trace_chord=True, rest=(0,0,4096,0,0,0)):
     """Execute the released dispatch and stock enqueue code with a simulated radio reader."""
-    image = (ROOT / "build/Lite2AirMouse-v106-s-mode-r31.bin").read_bytes()
+    image = (ROOT / "build/Lite2AirMouse-v106-s-mode-r33.bin").read_bytes()
     machine = Machine()
     u = machine.u
     u.mem_write(0x1018000, image)
@@ -18,7 +18,7 @@ def wireless_scan(enable_trace_chord=True):
     u.mem_write(0x20152, bytes([2]))
     u.mem_write(0x2022b, bytes([10]))
     tick = 0
-    sample = (0, 0)
+    sample = rest
     seen = []
     packets = []
     physical = 0
@@ -33,7 +33,7 @@ def wireless_scan(enable_trace_chord=True):
             seen.append((packet[1], struct.unpack_from("<hh", packet, 3) if packet[1] == 1 else None))
             return
         if address == 0x101d60c:
-            uc.mem_write(uc.reg_read(UC_ARM_REG_R0), struct.pack("<6h", 0, 0, 4096, 0, *sample))
+            uc.mem_write(uc.reg_read(UC_ARM_REG_R0), struct.pack("<6h", *sample))
             uc.reg_write(UC_ARM_REG_R0, 1)
         if address == 0x1021b64:
             uc.reg_write(UC_ARM_REG_R0, physical)
@@ -62,10 +62,10 @@ def wireless_scan(enable_trace_chord=True):
         machine.call('scan_gate')
         return routes[-1]
 
-    def step(full=False, buttons=0, gyro=(0, -1024), ticks=1, axes=0x80808080, reserve=None):
+    def step(full=False, buttons=0, gyro=(0, -1024), ticks=1, axes=0x80808080, reserve=None, imu=None):
         nonlocal tick, sample, physical
         physical=0 if buttons==9 and not enable_trace_chord else buttons
-        sample = gyro
+        sample = imu if imu is not None else (0,0,4096,0,*gyro)
         tick += ticks
         write, = struct.unpack("<H", u.mem_read(0x23006, 2))
         read = start + ((write + 1 - start) % (end - start + 1)) if full else write
@@ -80,13 +80,35 @@ def wireless_scan(enable_trace_chord=True):
         return seen[-1] if after != write else (None, None)
 
     for _ in range(110):
-        step(gyro=(0, 0))
+        step(imu=rest)
     step.packets = packets
     step.gate = gate
     return step
 
 
 class WirelessQueueTests(unittest.TestCase):
+    def test_world_yaw_in_raw_and_slot_reports(self):
+        from math import sqrt
+        grips=[(0,0,1),(1,0,0),(0,1,0),(0,-1,0),(1/sqrt(2),0,1/sqrt(2)),
+               (1/sqrt(3),1/sqrt(3),1/sqrt(3)),(0,0,-1)]
+        for up in grips:
+            accel=tuple(round(4096*n) for n in up)
+            bias=(7,-4,9)
+            step=wireless_scan(rest=accel+bias)
+            for sign in (-1,1):
+                imu=accel+tuple(b+round(-sign*1024*n) for b,n in zip(bias,up))
+                start=len(step.packets)
+                for _ in range(100):step(imu=imu)
+                reports=[p for p in step.packets[start:] if p[1]==1]
+                self.assertGreater(len(reports),90)
+                for p in reports:
+                    sx,sy=struct.unpack_from('<hh',p,8)
+                    self.assertAlmostEqual(sx,sign*1024,delta=2)
+                    self.assertLessEqual(abs(sy),2)
+                raw=[struct.unpack_from('<hh',p,3) for p in reports]
+                self.assertAlmostEqual(sum(x for x,y in raw),sign*9000,delta=190)
+                self.assertLessEqual(sum(abs(y) for x,y in raw),8)
+
     def test_trace_keeps_pointer_and_counts_only_accepted_mouse_reports(self):
         original,candidate=wireless_scan(enable_trace_chord=False),wireless_scan()
         last=None

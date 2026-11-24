@@ -143,6 +143,27 @@ static int32_t signed_axis(const uint8_t *axis) {
     return (int16_t)(axis[0] | (axis[1] << 8));
 }
 
+/* The scanner can report nominal center and a second stable resting position.
+   Map the measured neutral interval to zero before forming either report. */
+const volatile uint32_t lite2_stick_centers[2] = {0x80808080,0x80808080};
+
+uint32_t lite2_center_axes(uint32_t raw) {
+    uint32_t result = 0;
+    uint32_t lows = lite2_stick_centers[0], highs = lite2_stick_centers[1];
+    for (int i = 0; i < 4; ++i) {
+        int low = lows >> 24, high = highs >> 24;
+        int sample = raw >> 24;
+        int delta = 0;
+        if (sample < low) delta = (sample-low)*128/low;
+        if (sample > high) delta = (sample-high)*127/(255-high);
+        result = (result << 8) | (unsigned)(128 + delta);
+        lows <<= 8;
+        highs <<= 8;
+        raw <<= 8;
+    }
+    return result;
+}
+
 static void update_power_shortcut(uint32_t physical, unsigned dt) {
     /* Arm after release so powering up or reconnecting cannot send Home. */
     if (!(physical & POWER_BUTTON)) {
@@ -169,6 +190,8 @@ void lite2_dispatch(uint32_t buttons, uint32_t axes, uint32_t triggers) {
         STATE->mouse.calibrated = STATE->mouse.have_anchor = 0;
         STATE->mouse.click_ms = STATE->mouse.previous_clicks = 0;
         STATE->mouse.calibration_ms = 0;
+        STATE->mouse.tilt_variance=0;
+        STATE->mouse.sum_roll=0;
         STATE->mouse.sum_x = STATE->mouse.sum_z = 0;
         STATE->mouse.fine_x = STATE->mouse.fine_y = 0;
         memset(&STATE->initialized, 0, offsetof(Adapter, radio) - offsetof(Adapter, initialized));
@@ -177,7 +200,7 @@ void lite2_dispatch(uint32_t buttons, uint32_t axes, uint32_t triggers) {
     }
     if (!transports) return;
     if (axes == UINT32_MAX) axes = READ32(0x201a0);
-    if (!axes) axes = 0x80808080;  /* Before the first valid stock ADC sample. */
+    axes = axes ? lite2_center_axes(axes) : 0x80808080;
     /* The Bluetooth run loop timestamps timers with 0x204f0, in units
        of the period programmed by the stock timer driver. */
     uint32_t tick = bluetooth && !usb ? READ32(0x204f0) : READ32(0x20034);
@@ -270,8 +293,8 @@ void lite2_dispatch(uint32_t buttons, uint32_t axes, uint32_t triggers) {
         put_signed16(packet+10, (int)(uint8_t)(axes >> 8) - 128);
         source = 2;
     } else if (ok && STATE->mouse.calibrated && !(buttons & 4)) {
-        put_signed16(packet+8, STATE->mouse.bias_z - (int32_t)imu[5]);
-        put_signed16(packet+10, (int32_t)imu[4] - STATE->mouse.bias_x);
+        put_signed16(packet+8, STATE->mouse.yaw_rate);
+        put_signed16(packet+10, STATE->mouse.pitch_rate);
         source = 1;
     }
     STATE->fast_motion = !usb && (STATE->mouse.wheel_direction || packet[2] || (source && (STATE->mouse.moving_x || STATE->mouse.moving_y)));
@@ -366,7 +389,7 @@ void lite2_dispatch(uint32_t buttons, uint32_t axes, uint32_t triggers) {
             diagnostic[6] = dt; diagnostic[7] = READ8(0x20184);
             for (unsigned i=0;i<sizeof(imu);++i) diagnostic[8+i]=((const uint8_t *)imu)[i];
             __builtin_memcpy(diagnostic+20,&buttons,sizeof(buttons));
-            diagnostic[34] = 'R'; diagnostic[35] = 31;
+            diagnostic[34] = 'R'; diagnostic[35] = 33;
             __builtin_memcpy(diagnostic+36, &STATE->radio, offsetof(RadioStats, defer));
             for (unsigned i=0;i<9;++i) diagnostic[24+i]=packet[2+i];
             ((void (*)(const void *,unsigned))0x0101c669)(diagnostic,64);

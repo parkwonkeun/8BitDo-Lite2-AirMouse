@@ -19,6 +19,11 @@ typedef struct {
     uint8_t moving_x, moving_y;
     int16_t fine_x, fine_y;
     int32_t wheel_phase;
+    int16_t up[3];              /* Unit gravity reference in body coordinates, Q12. */
+    uint16_t tilt_variance;
+    int32_t sum_roll;
+    int16_t bias_roll, anchor_roll;
+    int32_t yaw_rate, pitch_rate;
 } MouseState;
 
 void put_signed16(uint8_t *p, int32_t value);

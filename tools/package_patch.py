@@ -59,6 +59,8 @@ def main():
     with (ROOT/'build/mouse.elf').open('rb') as f:
         elf=ELFFile(f)
         symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+        fusion=elf.get_section_by_name('.gravity')
+        fusion_start,fusion_bytes=fusion['sh_addr'],fusion.data()
     addon=(ROOT/'build/mouse.bin').read_bytes()
     image=bytearray(original);changes=[]
     def replace(address,old,new,reason):
@@ -109,18 +111,25 @@ def main():
         remaining-=3
     descriptor+=bytes.fromhex('05 01')*(remaining//2)
     replace(0x0102a3ea,usb,descriptor,'S USB mouse and diagnostic/vendor collection; D descriptor unchanged')
+    if fusion_start!=0x01027844 or fusion_start+len(fusion_bytes)>0x01027c00:
+        raise ValueError('Unexpected fusion placement')
+    offset=fusion_start-BASE
+    replace(fusion_start,original[offset:offset+len(fusion_bytes)],fusion_bytes,'S-mode gravity estimator and calibration')
     image.extend(addon)
     image.extend(b'\xff'*(-len(image)%512))
+    center=symbols['lite2_stick_centers']-BASE
+    if image[center:center+8]!=bytes([128])*8 or image[-8:]!=bytes([255])*8:
+        raise ValueError('Public firmware must contain neutral stick centers and no calibration stamp')
     image=bytes(image)
     if len(image)>0x15000:raise ValueError('Patch exceeds backed-up application region')
     package=cryptdo8.build_section(image,cryptdo8.CIPHERS['yichip'],106,BASE,len(image),0x5112)
     section=cryptdo8.parse_sections(package)[0]
     if cryptdo8.decrypt_section(package,section,cryptdo8.CIPHERS['yichip'])!=image:
         raise ValueError('Re-encryption roundtrip failed')
-    prefix=ROOT/'build/Lite2AirMouse-v106-s-mode-r31'
+    prefix=ROOT/'build'/'Lite2AirMouse-v106-s-mode-r33'
     prefix.with_suffix('.bin').write_bytes(image)
     prefix.with_suffix('.dat').write_bytes(package)
-    manifest=dict(status='EXPERIMENTAL_S_MOUSE_KEYBOARD_D_STOCK',revision=31,subrevision=0,base_plain_sha256=PLAIN_SHA,
+    manifest=dict(status='EXPERIMENTAL_S_MOUSE_KEYBOARD_D_STOCK',revision=33,subrevision=0,base_plain_sha256=PLAIN_SHA,
         base_dat_sha256=DAT_SHA,plain_sha256=sha(image),dat_sha256=sha(package),
         plain_bytes=len(image),dat_bytes=len(package),addon_bytes=len(addon),
         addon_address='0x0102be00',symbols={k:hex(v) for k,v in symbols.items() if k.startswith('lite2_')},

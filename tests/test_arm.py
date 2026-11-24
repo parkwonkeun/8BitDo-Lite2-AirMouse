@@ -24,15 +24,15 @@ class Machine:
         self.u.mem_map(0x20000, 0x10000)
         with (ROOT / 'build/mouse.elf').open('rb') as f:
             elf = ELFFile(f)
-            for seg in elf.iter_segments():
-                if seg['p_type'] == 'PT_LOAD':
-                    self.u.mem_write(seg['p_vaddr'], seg.data())
+            for section in ('.gravity', '.text'):
+                part=elf.get_section_by_name(section)
+                self.u.mem_write(part['sh_addr'],part.data())
             self.symbols = {s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
         self.u.hook_add(UC_HOOK_CODE, self.stop, begin=STOP, end=STOP)
-        self.u.mem_write(STATE-16, b'\xa5'*(16+52+16))
+        self.u.mem_write(STATE-16, b'\xa5'*(16+76+16))
         self.call('mouse_reset', STATE)
         assert self.u.mem_read(STATE-16,16) == b'\xa5'*16
-        assert self.u.mem_read(STATE+52,16) == b'\xa5'*16
+        assert self.u.mem_read(STATE+76,16) == b'\xa5'*16
 
     def stop(self, uc, address, size, data): uc.emu_stop()
 
@@ -57,7 +57,7 @@ class Machine:
         self.call('mouse_step',STATE,IMU,buttons,dt,OUTPUT,axes if axes>0xffff else axes|0x80800000)
         assert self.u.mem_read(OUTPUT-16,16)==b'\xa5'*16
         assert self.u.mem_read(OUTPUT+9,16)==b'\xa5'*16
-        assert self.u.mem_read(STATE+52,16)==b'\xa5'*16
+        assert self.u.mem_read(STATE+76,16)==b'\xa5'*16
         return struct.unpack('<Bhhb3s', self.u.mem_read(OUTPUT,9))
 
     def calibrate(self, sample=(0,0,4096,0,0,0)):
@@ -77,14 +77,14 @@ class CoreTests(unittest.TestCase):
 
     def test_click_hold_release_drag_and_stick(self):
         self.m.calibrate()
-        imu=(0,0,4096,0,1024,-2048)
+        imu=(0,0,4096,0,0,-2048)
         for button in (0x20,0x10):
             self.assertEqual(self.m.step(imu,button)[0:3],(1 if button==0x20 else 2,0,0))
-            self.assertEqual(self.m.step(imu,0)[1:3],(180,40))
+            self.assertEqual(self.m.step(imu,0)[1:3],(180,0))
         for _ in range(20):
             self.assertEqual(self.m.step(imu,0x20)[0:3],(1,0,0))
-        self.assertEqual(self.m.step(imu,0x20)[0:3],(1,180,40))
-        self.assertEqual(self.m.step(imu,0)[0:3],(0,180,40))
+        self.assertEqual(self.m.step(imu,0x20)[0:3],(1,180,0))
+        self.assertEqual(self.m.step(imu,0)[0:3],(0,180,0))
         result=self.m.step(imu,0x20,axes=0x808080ff)
         self.assertEqual(result[0],1)
         self.assertGreater(result[1],0)
@@ -99,11 +99,46 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(motion,0)
         self.assertEqual(self.m.u.mem_read(STATE+32,1),b'\x01')
 
+    def test_tracking_during_grip_change_and_linear_acceleration(self):
+        import math
+        self.m.calibrate()
+        # Roll around body X from flat to vertical in one second. The pad
+        # measures +Y gravity when this right-handed rotation reaches 90°.
+        for n in range(1,101):
+            angle=n*math.pi/200
+            frame=self.m.step((0,round(4096*math.sin(angle)),round(4096*math.cos(angle)),1282,0,0))
+            self.assertEqual(frame[1:3],(0,0))
+        for _ in range(12):
+            # Translation biases measured acceleration while yaw remains constant.
+            frame=self.m.step((4096,4096,0,0,-1024,0))
+            self.assertAlmostEqual(frame[1],90,delta=1)
+            self.assertLessEqual(abs(frame[2]),1)
+        for _ in range(30):
+            self.assertEqual(self.m.step((0,4096,0,0,0,0))[1:3],(0,0))
+
+    def test_accelerometer_corrects_a_tilt_prediction_error(self):
+        self.m.calibrate()
+        # Simulate missed roll motion. Gravity now points 30 degrees away
+        # from the current prediction, but the gyro has returned to rest.
+        level=(0,2048,3547,0,0,0)
+        self.m.step(level)
+        first=struct.unpack('<3h',self.m.u.mem_read(STATE+52,6))
+        self.assertGreater(first[1],0)
+        self.assertLess(first[1],2048)
+        for _ in range(350):
+            self.assertEqual(self.m.step(level)[1:3],(0,0))
+        settled=struct.unpack('<3h',self.m.u.mem_read(STATE+52,6))
+        self.assertAlmostEqual(settled[1],2048,delta=30)
+        self.assertAlmostEqual(settled[2],3547,delta=30)
+
     def test_integrated_motion_and_sign(self):
         self.m.calibrate()
         for sign in (1,-1):
-            results=[self.m.step((0,0,4096,0,1024*sign,-2048*sign)) for _ in range(100)]
+            self.m=Machine();self.m.calibrate()
+            results=[self.m.step((0,0,4096,0,0,-2048*sign)) for _ in range(100)]
             self.assertEqual(sum(r[1] for r in results),18000*sign)
+            self.assertEqual(sum(r[2] for r in results),0)
+            results=[self.m.step((0,0,4096,0,1024*sign,0)) for _ in range(100)]
             self.assertEqual(sum(r[2] for r in results),4000*sign)
 
     def test_fine_rotation_in_rest_recording(self):
@@ -250,7 +285,7 @@ class CoreTests(unittest.TestCase):
 
     def test_l3_cycles_modes_and_debounces(self):
         self.m.calibrate()
-        gyro=(0,0,4096,0,1024,-2048)
+        gyro=(0,0,4096,0,0,-2048)
         self.assertEqual(self.m.step(gyro,buttons=4)[1:3],(0,0))
         self.assertEqual(self.m.u.mem_read(STATE+34,1),b'\x00')
         self.m.calibrate()
@@ -259,10 +294,10 @@ class CoreTests(unittest.TestCase):
         self.m.step(gyro)
         self.assertEqual(self.m.step(gyro,buttons=2)[1:3],(0,0))
         for _ in range(3): self.m.step()
-        self.assertEqual(self.m.step(gyro,buttons=2,axes=0x80ff)[1:3],(180,40))
+        self.assertEqual(self.m.step(gyro,buttons=2,axes=0x80ff)[1:3],(180,0))
         for _ in range(3):
-            self.assertEqual(self.m.step(gyro,axes=0x80ff)[1:3],(180,40))
-        self.assertEqual(self.m.step(gyro,buttons=2)[1:3],(180,40))
+            self.assertEqual(self.m.step(gyro,axes=0x80ff)[1:3],(180,0))
+        self.assertEqual(self.m.step(gyro,buttons=2)[1:3],(180,0))
         self.m.step()
         self.assertGreater(self.m.step(axes=0x80ff)[1],8)
 
@@ -277,7 +312,8 @@ class CoreTests(unittest.TestCase):
 
     def test_extreme_input_and_gap(self):
         self.m.calibrate()
-        self.assertEqual(self.m.step((0,0,4096,0,-32768,-32768),dt=100)[1:3],(28800,-12800))
+        self.assertEqual(self.m.step((0,0,4096,0,0,-32768),dt=100)[1:3],(28800,0))
+        self.assertEqual(self.m.step((0,0,4096,0,-32768,0),dt=100)[2],-12800)
         self.assertEqual(self.m.step((0,0,4096,-32768,0,-32768),dt=101)[1:3],(0,0))
         self.assertEqual(self.m.step(dt=0)[1:3],(0,0))
 

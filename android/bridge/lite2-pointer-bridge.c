@@ -123,6 +123,7 @@ struct spline {
 struct profile {
     struct spline cursor_curve,scroll_curve;
     int click_hold;
+    int axes[4][4];
     int gx,gy,pointer_dead,wheel_dead;
     int pointer[CURVE_SIZE], wheel[CURVE_SIZE];
 };
@@ -253,6 +254,13 @@ static double spline_gain(const struct spline *curve,double tilt) {
     return fmin(8.,fmax(0.,wanted/reference));
 }
 enum { MAX_GYRO_PERCENT = 500 };
+static double slot_axis(const struct profile *p,int index,int value) {
+    const int *a=p->axes[index];
+    if(a[3]==a[0])return value; // Profiles from older clients.
+    if(value<a[1])return 127.*fmax(-1.,(double)(value-a[1])/(a[1]-a[0]));
+    if(value>a[2])return 127.*fmin(1.,(double)(value-a[2])/(a[3]-a[2]));
+    return 0;
+}
 static int parse_profile(const char *line,struct profile *settings) {
     if(line[0]=='C' || line[0]=='F') {
         struct profile update={.click_hold=1};
@@ -262,8 +270,20 @@ static int parse_profile(const char *line,struct profile *settings) {
            !read_spline(&pos,&update.cursor_curve) || !read_spline(&pos,&update.scroll_curve))return 0;
         if(line[0]=='F') {
             double hold;
-            if(!number(&pos,0,1,&hold) || hold!=floor(hold) || *pos)return 0;
+            if(!number(&pos,0,1,&hold) || hold!=floor(hold))return 0;
             update.click_hold=(int)hold;
+            if(*pos) {
+                for(int i=0;i<4;i++) {
+                    int *a=update.axes[i];
+                    for(int j=0;j<4;j++) {
+                        double v;
+                        if(!number(&pos,-128,127,&v) || floor(v)!=v)return 0;
+                        a[j]=(int)v;
+                    }
+                    if(a[0]>=a[1] || a[1]>a[2] || a[2]>=a[3])return 0;
+                }
+                if(*pos)return 0;
+            }
         } else if(*pos) {
             double flag;
             if(!number(&pos,0,1,&flag) || flag!=floor(flag))return 0;
@@ -372,12 +392,12 @@ static int flush_motion(int out,struct motion *m,const struct profile *p,uint64_
     uint64_t now=now_ms();
     if(!advance_pointer(out,m,now))return 0;
     int raw_frame=m->source>=1024 && m->source<1792;
-    int wheel_offset=0;
+    double wheel_offset=0;
     double raw_ms=0;
     if(raw_frame) {
         if(!m->previous_raw){puts("r19 raw input connected");fflush(stdout);}
         int tag=m->source-1024;
-        wheel_offset=128-(tag & 255);
+        wheel_offset=-slot_axis(p,3,(tag & 255)-128);
         m->source=tag>>8;
         if(!m->source && m->last_source) m->zero=(struct gyro_zero){0};
         uint64_t delta=us-m->previous_raw;
@@ -399,10 +419,11 @@ static int flush_motion(int out,struct motion *m,const struct profile *p,uint64_
     if(hold){m->rx=m->ry=0;m->dx=m->dy=0;}
     unsigned hold_ms=45;
     if(m->source==2 && p->cursor_curve.count) {
-        double radius=hypot((double)m->raw_x,m->raw_y);
+        double x=slot_axis(p,0,m->raw_x), y=slot_axis(p,1,m->raw_y);
+        double radius=hypot(x,y);
         double response=spline_output(&p->cursor_curve,radius/127.);
         double scale=radius>0 ? 2.44*response/radius : 0;
-        m->vx=scale*m->raw_x;m->vy=scale*m->raw_y;
+        m->vx=scale*x;m->vy=scale*y;
 
     } else if(raw_frame && m->source==1) {
         double axis[]={m->raw_x,m->raw_y};
@@ -444,8 +465,8 @@ static int flush_motion(int out,struct motion *m,const struct profile *p,uint64_
     }
     m->source=m->raw_x=m->raw_y=0;
     if(raw_frame && p->scroll_curve.count) {
-        double response=spline_output(&p->scroll_curve,abs(wheel_offset)/127.);
-        double velocity=copysign(response*3.6,wheel_offset);
+        double response=spline_output(&p->scroll_curve,fabs(wheel_offset)/127.);
+        double velocity=wheel_offset==0?0:copysign(response*3.6,wheel_offset);
         if(!advance_wheel(out,m,now,!velocity || velocity*m->wheel_velocity<0))return 0;
         if(velocity) {
             if(!m->wheel_until)m->wheel_due=now+8;
@@ -548,12 +569,20 @@ static void serve(int client,int watch) {
     uint64_t wheel_notice_at=0;
     int last_wheel_direction=0;
     int last_axes[4]={999,999,999,999};
+    int sampling=0; // 1 for left, 2 for right.
+    uint64_t sample_at=0;
     uint64_t activity=now_ms();
     char lines[4096];
     size_t used=0;
     while(!stopped && now_ms()-activity<5000) {
+        if(sampling && gamepad && now_ms()-sample_at>=50) {
+            // Unchanged ABS axes retain their last kernel state.
+            d.sent=0;
+            if(!send_gamepad(client,&d))goto done;
+            sample_at=now_ms();
+        }
         struct pollfd sources[2]={{.fd=client,.events=POLLIN},{.fd=in,.events=POLLIN}};
-        int timeout=motion.lease_end?4:250;
+        int timeout=motion.lease_end?4:sampling?50:250;
         if(motion.wheel_until) {
             uint64_t now=now_ms();
             int wait=motion.wheel_due>now?(int)(motion.wheel_due-now):0;
@@ -571,7 +600,9 @@ static void serve(int client,int watch) {
             char *start=lines,*end;
             while((end=strchr(start,'\n'))) {
                 *end=0;
-                if(!strcmp(start,"M 1") || !strcmp(start,"M 0")) {
+                if(watch==2 && (!strcmp(start,"K 1") || !strcmp(start,"K 2"))) {
+                    sampling=start[2]-'0';
+                } else if(!strcmp(start,"M 1") || !strcmp(start,"M 0")) {
                     preview_enabled=start[2]=='1';
                     if(watch!=2)goto done;
                     motion=(struct motion){0};
@@ -641,7 +672,10 @@ static void serve(int client,int watch) {
                         if((tag>>8)==6) {x=motion.raw_x;y=motion.raw_y;}
                         ry=(tag&255)-128;
                         int axes[]={x,y,rx,ry};
-                        if(memcmp(axes,last_axes,sizeof(axes))) {
+                        int usable=!sampling || (extended && (sampling==2 || (tag>>8)==6));
+                        int refresh=sampling && now_ms()-sample_at>=50;
+                        if(usable && (refresh || memcmp(axes,last_axes,sizeof(axes)))) {
+                            sample_at=now_ms();
                             char line[64];
                             int len=snprintf(line,sizeof(line),"T %d %d %d %d\n",x,y,rx,ry);
                             if(write(client,line,len)!=len)goto done;

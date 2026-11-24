@@ -3,6 +3,7 @@ package local.lite2.control;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -28,6 +29,8 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     static final int BG=0xff101719, PANEL=0xff192729, EDGE=0xff304448, WHITE=0xffeaf7f3;
     static final int MUTED=0xffa4bab8, MINT=0xff74ebc2, GOLD=0xfff4c778;
     Profiles store;
+    private final TabletInput tabletInput=new TabletInput(this);
+    void useTabletInput(String token){startBridge(new Intent().putExtra("bridgeToken",token));}
     PointerBridge pointerBridge;
     String bridgeToken;
     final Runnable bridgeStatus=()->runOnUiThread(this::onBridgeState);
@@ -171,10 +174,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     private void onGamepad(int[] values,int down,int up) {
         if(resumed && !adjustment && !dirty && modeS)openMode(false);
         checkMonitorHold(displayButtons(values[0]),displayButtons(down));
+        if(!modeS && resumed)receiveAxes(values[1],values[2],values[3],values[4]);
         if(!modeS && resumed && !adjustment) {
             pressedMask=displayButtons(values[0]);
-            hatBits=0;lx=values[1]/127f;ly=values[2]/127f;
-            rx=values[3]/127f;ry=values[4]/127f;lt=values[5]/127f;rt=values[6]/127f;
+            hatBits=0;lt=values[5]/127f;rt=values[6]/127f;
             if((down|up)!=0) {
                 int index=Profiles.SCAN_BUTTON[Integer.numberOfTrailingZeros(down!=0?down:up)];
                 last=t(down!=0?"%s · 입력":"%s · 뗌",Profiles.BUTTONS[index]);
@@ -189,6 +192,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(down==0 || (resumed && (!adjustment || !hasWindowFocus())))return;
         int active=store.active(s);
         Profiles.Profile current=resumed && modeS==s && active!=Profiles.RAW?profile:store.navigation(s);
+        store.applyVolumePresses(current,active,down);
         int next=Profiles.slotForPresses(current,active,down);
         if(next==Profiles.NO_CHANGE || next==active)return;
         if(resumed && modeS==s)setSlot(s,next);
@@ -203,7 +207,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(bridgeToken==null)return;
         int active=store.active(true);
         Profiles.Profile current=active==Profiles.RAW?null:modeS && !useActiveOnResume?profile:store.load(true,active);
-        char route=resumed && !adjustment?PointerBridge.MONITOR:
+        char route=resumed && (!adjustment || stickCapture!=null)?PointerBridge.MONITOR:
             active==Profiles.RAW?PointerBridge.DIRECT:PointerBridge.REMAP;
         pointerBridge=PointerBridge.attach(bridgeToken,bridgeStatus,this::onPhysicalButtons,this::onSticks,store,current,route);
         pointerBridge.gamepad=this::onGamepad;
@@ -213,7 +217,8 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             updateMonitor();
         }:null;
         pointerBridge.monitorGyro(resumed && modeS && !adjustment && gyroPreview!=null?gyroPreview:null);
-        pointerBridge.set(current);
+        if(stickCapture!=null && route==PointerBridge.MONITOR)pointerBridge.sampleStick(captureLeft);
+        else pointerBridge.set(current);
     }
     private void drawPad() {
         int mask=pressedMask;
@@ -227,15 +232,14 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     private void onSticks(int x,int y,int rightX,int rightY) {
         if(!modeS)return;
         if(activeMouse==0 && (x!=0 || y!=0 || rightX!=0 || rightY!=0)){activeMouse=1;updateMonitor();}
-        lx=x/127f;ly=y/127f;rx=rightX/127f;ry=rightY/127f;
-        drawPad();
+        receiveAxes(x,y,rightX,rightY);
     }
     @Override protected void onResume() {
         super.onResume();resumed=true;
         if(useActiveOnResume && !dirty){useActiveOnResume=false;loadSlot();drawScreen();}
         pushPointerDraft();
     }
-    @Override protected void onPause() {cancelMonitorHold();resumed=false;pushPointerDraft();super.onPause();}
+    @Override protected void onPause() {cancelMonitorHold();resumed=false;if(captureDialog!=null)captureDialog.dismiss();pushPointerDraft();super.onPause();}
     @Override public void onDestroy() {
         if(pointerBridge!=null) {
             if(isFinishing()) {
@@ -278,6 +282,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     }
     private void updateDevice() {
         InputDevice device=connected();
+        if(captureDialog!=null && (device==null || isS(device)!=modeS))captureDialog.dismiss();
         if(device==null)resetPad();
         if(device!=null && isS(device)!=modeS && !dirty) openMode(isS(device));
         else updateStatus();
@@ -291,6 +296,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     private void loadSlot() { openSlot(store.active(modeS)); }
     private void openSlot(int selected) { openSlot(selected,false); }
     private void openSlot(int selected,boolean keepInput) {
+        if(calibrationMenu!=null)calibrationMenu.dismiss();
         useActiveOnResume=false;
         slot=selected;
         profile=store.load(modeS,slot);
@@ -374,7 +380,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(scroll!=null && renderedAdjust) adjustScroll[renderedS?0:1]=scroll.getScrollY();
     }
 
-    private String t(String key,Object... args) { return Words.get(language,key,args); }
+    String t(String key,Object... args) { return Words.get(language,key,args); }
     private String[] translated(String[] keys) {
         String[] out=new String[keys.length];
         for(int i=0;i<keys.length;i++) out[i]=t(keys[i]);
@@ -614,6 +620,93 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         updateMonitor();
     }
 
+    private AlertDialog captureDialog;
+    private AlertDialog calibrationMenu;
+    private void showCalibration() {
+        LinearLayout controls=column();
+        controls.setPadding(dp(20),dp(8),dp(20),0);
+        item(controls,text("최소 / 영점 / 최대",14,MUTED,false));
+        calibrationControls(controls,true);
+        calibrationControls(controls,false);
+        ScrollView page=new ScrollView(this);
+        page.addView(controls);
+        calibrationMenu=new AlertDialog.Builder(this)
+            .setTitle(t("스틱 보정")+" · "+t("슬롯 %d",slot+1)).setView(page)
+            .setPositiveButton(t("닫기"),null).create();
+        calibrationMenu.setOnDismissListener(d->{calibrationMenu=null;});
+        calibrationMenu.show();
+    }
+    private StickCalibration.Capture stickCapture;
+    private StickCalibration captureTarget;
+    private boolean captureLeft;
+    private TextView captureReadout, calibrationSummary;
+    private final Runnable refreshCapture=new Runnable() {
+        public void run() {
+            if(captureDialog==null)return;
+            StickCalibration.Capture c=stickCapture;
+            long now=android.os.SystemClock.elapsedRealtime();
+            boolean fresh=c.count>0 && now-c.last<350;
+            String row=fresh?String.format(Locale.ROOT,"X   %d … %d     Y   %d … %d",c.low[0],c.high[0],c.low[1],c.high[1]):t("입력 대기 중");
+            if(!row.contentEquals(captureReadout.getText()))captureReadout.setText(row);
+            boolean ready=fresh && c.ready(captureTarget,now);
+            Button apply=captureDialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            if(apply.isEnabled()!=ready)apply.setEnabled(ready);
+            shortcutTimer.postDelayed(this,100);
+        }
+    };
+    private void calibrationControls(LinearLayout parent,boolean left) {
+        Profiles.Stick stick=left?profile.left:profile.right;
+        LinearLayout group=column();item(parent,group);
+        item(group,text(left?"왼쪽 스틱":"오른쪽 스틱",16,WHITE,true));
+        TextView summary=text(stick.calibration.summary(),14,MUTED,false);item(group,summary);
+        LinearLayout actions=row();
+        split(actions,button("영점 측정",false,()->captureStick(left,true,summary)));
+        split(actions,button("최대 범위 측정",false,()->captureStick(left,false,summary)));
+        item(group,actions);
+    }
+    private void captureStick(boolean left,boolean center,TextView summary) {
+        InputDevice pad=connected();
+        if(profile==null || pad==null || isS(pad)!=modeS || pointerBridge==null || !pointerBridge.connected) {
+            Toast.makeText(this,t("패드와 입력 도우미 연결을 확인하세요."),Toast.LENGTH_LONG).show();
+            return;
+        }
+        captureLeft=left;
+        captureTarget=(left?profile.left:profile.right).calibration;
+        stickCapture=new StickCalibration.Capture(center);
+        calibrationSummary=summary;
+        String instruction=t(center?"스틱을 놓고 가만히 두세요.":"스틱을 바깥 테두리를 따라 천천히 한 바퀴 돌려 주세요.");
+        if(modeS && left)instruction+="\n"+t("L3로 두 번째 LED를 켜세요.");
+        LinearLayout content=column();content.setPadding(dp(24),dp(8),dp(24),0);
+        item(content,text(instruction,16,WHITE,false));
+        captureReadout=text("",16,MINT,true);item(content,captureReadout);
+        captureDialog=new AlertDialog.Builder(this).setTitle(t(left?"왼쪽 스틱":"오른쪽 스틱")+" · "+t(center?"영점 측정":"최대 범위 측정"))
+            .setView(content).setNegativeButton(android.R.string.cancel,null)
+            .setPositiveButton(t("적용"),null).create();
+        captureDialog.setOnDismissListener(d->{
+            shortcutTimer.removeCallbacks(refreshCapture);
+            captureDialog=null;stickCapture=null;captureTarget=null;
+            pushPointerDraft();
+        });
+        captureDialog.show();
+        captureDialog.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        captureDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(!stickCapture.ready(captureTarget,android.os.SystemClock.elapsedRealtime()))return;
+            stickCapture.apply(captureTarget);
+            calibrationSummary.setText(captureTarget.summary());
+            edited();captureDialog.dismiss();
+        });
+        pushPointerDraft();
+        refreshCapture.run();
+    }
+    private void receiveAxes(int x,int y,int rightX,int rightY) {
+        if(stickCapture!=null)stickCapture.sample(captureLeft?x:rightX,captureLeft?y:rightY,android.os.SystemClock.elapsedRealtime());
+        lx=profile==null?x/127f:profile.left.calibration.normalized(0,x);
+        ly=profile==null?y/127f:profile.left.calibration.normalized(1,y);
+        rx=profile==null?rightX/127f:profile.right.calibration.normalized(0,rightX);
+        ry=profile==null?rightY/127f:profile.right.calibration.normalized(1,rightY);
+        drawPad();updateMonitor();
+    }
+
     private CurveView monitorCurve(LinearLayout plots,Profiles.Stick stick,String title) {
         LinearLayout section=column();
         plots.addView(section,new LinearLayout.LayoutParams(0,-1,1));
@@ -638,6 +731,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             item(profiles,button("다른 앱 위에 슬롯 표시",false,()->startActivity(new android.content.Intent(
                 android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 android.net.Uri.parse("package:"+getPackageName())))));
+        item(profiles,button("태블릿에서 입력 도우미 연결",false,tabletInput::show));
         if(slot==Profiles.RAW)return;
         if(slot!=store.active(modeS))
             item(profiles,button("이 슬롯 사용",false,()->setSlot(slot)));
@@ -655,6 +749,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         split(resets,restoreButton);
         item(profiles,resets);
         if(!modeS)item(profiles,text("D 프로필 미리보기 · 설정이 게임패드 입력에 직접 적용되지 않습니다.",13,GOLD,false));
+        item(profiles,button("스틱 보정",false,this::showCalibration));
         makeButtonAssignments();
         makeStickGraphs(body,true);
         if(modeS) {
@@ -691,12 +786,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             t(Profiles.BUTTONS[selectedPadButton])+"   →   "+t(Profiles.ACTIONS[profile.map[selectedPadButton]]));
     }
     private void pickAction(int index,Runnable refresh) {
-        int count=modeS?21:Profiles.ACTIONS.length;
-        String[] choices=new String[count];
-        int[] ids=new int[count];
+        int[] ids=Profiles.assignableActions(modeS);
+        String[] choices=new String[ids.length];
         int checked=-1;
-        for(int i=0;i<count;i++) {
-            ids[i]=modeS && i==20?Profiles.PREVIOUS_SLOT:i;
+        for(int i=0;i<ids.length;i++) {
             choices[i]=t(Profiles.ACTIONS[ids[i]]);
             if(ids[i]==profile.map[index])checked=i;
         }
@@ -870,6 +963,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             rx=e.getAxisValue(MotionEvent.AXIS_Z); ry=e.getAxisValue(MotionEvent.AXIS_RZ);
             if(device.getMotionRange(MotionEvent.AXIS_Z)==null) rx=e.getAxisValue(MotionEvent.AXIS_RX);
             if(device.getMotionRange(MotionEvent.AXIS_RZ)==null) ry=e.getAxisValue(MotionEvent.AXIS_RY);
+            if(stickCapture==null && profile!=null) {
+                lx=profile.left.calibration.normalized(0,lx*127);ly=profile.left.calibration.normalized(1,ly*127);
+                rx=profile.right.calibration.normalized(0,rx*127);ry=profile.right.calibration.normalized(1,ry*127);
+            }
             lt=Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER),e.getAxisValue(MotionEvent.AXIS_BRAKE));
             rt=Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER),e.getAxisValue(MotionEvent.AXIS_GAS));
             float hx=e.getAxisValue(MotionEvent.AXIS_HAT_X), hy=e.getAxisValue(MotionEvent.AXIS_HAT_Y);

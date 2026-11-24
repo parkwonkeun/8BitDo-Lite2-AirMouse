@@ -20,6 +20,33 @@ final class Words {
     }
     private static final Map<String,String[]> TEXT=new HashMap<>();
     static {
+        add("스틱 보정","摇杆校准","スティック補正","Stick calibration");
+        add("최소 / 영점 / 최대","最小 / 中心 / 最大","最小 / 中心 / 最大","Minimum / center / maximum");
+        add("영점 측정","测量中心","中心を測定","Measure center");
+        add("최대 범위 측정","测量行程","可動範囲を測定","Measure full travel");
+        add("적용","应用","適用","Apply");
+        add("패드와 입력 도우미 연결을 확인하세요.","请检查手柄和输入助手的连接。","パッドと入力ヘルパーの接続を確認してください。","Check the controller and input helper connections.");
+        add("스틱을 놓고 가만히 두세요.","松开摇杆，保持静止。","スティックを離して静止させてください。","Release the stick and leave it still.");
+        add("스틱을 바깥 테두리를 따라 천천히 한 바퀴 돌려 주세요.","将摇杆沿外圈缓慢转一圈。","スティックを外周に沿ってゆっくり一周させてください。","Move the stick slowly once around its outer edge.");
+        add("L3로 두 번째 LED를 켜세요.","按 L3 点亮第二盏灯。","L3で2番目のLEDを点灯してください。","Press L3 until the second LED lights.");
+        add("태블릿에서 입력 도우미 연결","在平板上连接输入助手","タブレットで入力ヘルパーに接続","Connect input helper on tablet");
+        add("무선 디버깅 설정","无线调试设置","ワイヤレス デバッグ設定","Wireless debugging settings");
+        add("처음 연결 · 페어링","首次连接 · 配对","初回接続・ペア設定","First connection · pair");
+        add("입력 도우미 시작","启动输入助手","入力ヘルパーを起動","Start input helper");
+        add("페어링 포트","配对端口","ペア設定ポート","Pairing port");
+        add("연결 포트","连接端口","接続ポート","Connection port");
+        add("6자리 페어링 코드","6 位配对码","6桁のペア設定コード","6-digit pairing code");
+        add("분할 화면에서 무선 디버깅의 ‘페어링 코드로 기기 페어링’을 열고 포트와 코드를 입력하세요.","在分屏中打开无线调试的配对码页面，输入端口和配对码。","分割画面でワイヤレスデバッグのペア設定コードを開き、ポートとコードを入力します。","In split screen, open Pair device with pairing code under Wireless debugging. Enter the port and code.");
+        add("무선 디버깅 첫 화면의 ‘IP 주소 및 포트’에서 콜론 뒤 숫자를 입력하세요.","输入无线调试首页 IP 地址冒号后的端口。","ワイヤレスデバッグの「IPアドレスとポート」のコロンの後の数字を入力します。","On the main Wireless debugging screen, enter the number after the colon in IP address & port.");
+        add("포트를 확인하세요.","请检查端口。","ポートを確認してください。","Check the port.");
+        add("페어링 완료 · 연결 포트로 도우미를 시작하세요.","配对完成，请使用连接端口启动助手。","ペア設定完了。接続ポートでヘルパーを起動してください。","Paired. Start the helper using the connection port.");
+        add("입력 도우미 연결됨","输入助手已连接","入力ヘルパー接続済み","Input helper connected");
+        add("무선 디버깅의 포트와 페어링 상태를 확인하세요.","请检查无线调试的端口和配对状态。","ワイヤレスデバッグのポートとペア設定を確認してください。","Check the wireless debugging port and pairing status.");
+        add("스틱 영점 보정","摇杆中心校准","スティック中心補正","Calibrate stick center");
+        add("측정","测量","測定","Measure");
+        add("L3로 두 번째 LED를 켜고 양쪽 스틱에서 손을 떼세요. 측정 후 D 모드 USB로 패드에 기록합니다.","按 L3 切到第二盏灯，松开两个摇杆。测量后通过 D 模式 USB 写入手柄。","L3で2番目のLEDを点灯させ、両スティックから手を離してください。測定後、DモードのUSBで書き込みます。","Press L3 until LED 2 lights and release both sticks. After measuring, write to the controller over USB in D mode.");
+        add("측정값을 저장했습니다. D 모드 USB로 패드에 기록하면 RAW와 모든 슬롯에 적용됩니다.","测量值已保存。通过 D 模式 USB 写入后，RAW 和所有槽位均生效。","測定値を保存しました。DモードのUSBで書き込むとRAWと全スロットに適用されます。","Measurement saved. Write it over D-mode USB to apply it to RAW and all slots.");
+        add("입력 도우미 연결과 두 번째 LED를 확인하고 스틱을 놓은 채 다시 측정하세요.","请确认输入助手已连接且第二盏灯亮起，松开摇杆后重试。","入力ヘルパーの接続と2番目のLEDを確認し、スティックを離して再測定してください。","Check the input helper and LED 2, release both sticks and measure again.");
         add("모니터 연결 대기 · 커서가 움직일 수 있습니다","等待监视连接 · 指针可能会移动","モニター接続待ち · カーソルが動く場合があります","Waiting for monitor connection · pointer may move");
         add("언어","语言","言語","Language");
         add("현재 슬롯 저장","保存当前配置","現在のスロットを保存","Save current slot");
@@ -106,7 +133,8 @@ final class Words {
         add("십자키 왼쪽","方向键左","十字キー左","D-pad left");
         add("십자키 오른쪽","方向键右","十字キー右","D-pad right");
         add("포인터 모드 전환","切换指针模式","ポインターモード切替","Switch pointer mode");
-        add("자이로 영점","校准陀螺仪","ジャイロのゼロ調整","Recalibrate gyro");
+        add("볼륨 올리기","调高音量","音量を上げる","Volume up");
+        add("볼륨 내리기","调低音量","音量を下げる","Volume down");
         add("%s · 뗌","%s · 已松开","%s · 離した","%s · released");
         add("이전 슬롯","上一个配置","前のスロット","Previous slot");
         add("다음 슬롯","下一个配置","次のスロット","Next slot");

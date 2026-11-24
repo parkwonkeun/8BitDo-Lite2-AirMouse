@@ -1,6 +1,8 @@
 #include "mouse_core.h"
 #include <string.h>
 
+void gravity_rates(MouseState *s,const int16_t imu[6],unsigned dt);
+
 enum { Y = 0x20, X = 0x10, R3 = 4, L3 = 2, STICK_DEAD_ZONE = 14 };
 
 static int32_t magnitude(int32_t value) { return value < 0 ? -value : value; }
@@ -79,10 +81,12 @@ static int32_t fine_gyro(int32_t value, int16_t *trend, int32_t *trim, uint32_t 
     return 0;
 }
 
-static void calibrate_gyro(MouseState *s, const int16_t imu[6],
+static __attribute__((section(".gravity"),noinline)) void calibrate_gyro(MouseState *s, const int16_t imu[6],
                            uint32_t dt, uint32_t buttons) {
     /* R3 resets gyro calibration without resetting the input mode or wheel. */
     if (buttons & R3) {
+        s->sum_roll=0;
+        s->tilt_variance=0;
         s->calibrated = s->have_anchor = 0;
         s->calibration_ms = 0;
         s->sum_x = s->sum_z = s->fraction_x = s->fraction_y = 0;
@@ -97,7 +101,7 @@ static void calibrate_gyro(MouseState *s, const int16_t imu[6],
     int stable = (imu[0] || imu[1] || imu[2]) && magnitude(gx) < 32
                && magnitude(gy) < 32 && magnitude(gz) < 32;
     if (s->have_anchor && (magnitude(gx - s->anchor_x) > 9
-                       || magnitude(gz - s->anchor_z) > 9)) stable = 0;
+                       || magnitude(gz - s->anchor_z) > 9 || magnitude(gy-s->anchor_roll)>9)) stable = 0;
     if (!stable) {
         /* One missing sample or noise spike must not erase a nearly complete
            resting window. Consecutive rejected samples restart acquisition. */
@@ -105,24 +109,26 @@ static void calibrate_gyro(MouseState *s, const int16_t imu[6],
             s->have_anchor = 2;
             return;
         }
-        s->sum_x = s->sum_z = 0;
+        s->sum_x = s->sum_z = s->sum_roll = 0;
         s->calibration_ms = 0;
         s->have_anchor = 0;
         return;
     }
     if (!s->have_anchor) {
-        s->anchor_x = gx; s->anchor_z = gz;
+        s->anchor_x = gx; s->anchor_z = gz; s->anchor_roll=gy;
     }
     s->have_anchor = 1;
     s->sum_x += gx * (int32_t)dt;
     s->sum_z += gz * (int32_t)dt;
+    s->sum_roll += gy * (int32_t)dt;
     s->calibration_ms += dt;
     if (s->calibration_ms >= 600) {
-        s->bias_x = s->sum_x / (int32_t)s->calibration_ms;
-        s->bias_z = s->sum_z / (int32_t)s->calibration_ms;
-        /* X pointer is negative sensor Z; Y follows sensor Y. */
-        s->sum_z = -(s->sum_z % s->calibration_ms) * 16384 / s->calibration_ms;
-        s->sum_x = (s->sum_x % s->calibration_ms) * 16384 / s->calibration_ms;
+        int half=s->calibration_ms/2;
+        s->bias_x=(s->sum_x+(s->sum_x<0?-half:half))/(int)s->calibration_ms;
+        s->bias_z=(s->sum_z+(s->sum_z<0?-half:half))/(int)s->calibration_ms;
+        s->bias_roll=(s->sum_roll+(s->sum_roll<0?-half:half))/(int)s->calibration_ms;
+        /* The fine-motion trims now live in cursor space, not sensor axes. */
+        s->sum_x=s->sum_z=0;
         s->calibrated = 1;
     }
 }
@@ -172,6 +178,8 @@ int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
         s->wheel_phase = phase;
     }
     if (dt > 100) {
+        s->tilt_variance=0;
+        s->yaw_rate=s->pitch_rate=0;
         s->fraction_x = s->fraction_y = 0;
         s->moving_x = s->moving_y = 0;
         s->fine_x = s->fine_y = 0;
@@ -184,8 +192,9 @@ int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
     if (s->pointer_mode != MODE_STICK && dt && (!s->calibrated || (buttons & R3)))
         calibrate_gyro(s, imu, dt, buttons);
     int gyro_valid = !(buttons & R3) && (imu[0] || imu[1] || imu[2]);
-    int32_t gyro_x = -((int32_t)imu[5] - s->bias_z);
-    int32_t gyro_y = (int32_t)imu[4] - s->bias_x;
+    if (gyro_valid) gravity_rates(s,imu,dt);
+    else s->tilt_variance=0;
+    int32_t gyro_x = s->yaw_rate, gyro_y=s->pitch_rate;
     int was_auto_stick = s->auto_stick;
     if (s->pointer_mode == MODE_AUTO && prior_mode == MODE_AUTO && !(buttons & L3)) {
         if (stick_crossed_half) {

@@ -6,8 +6,40 @@ public final class CurveCheck {
         if(!ok)throw new AssertionError(message);
     }
     public static void main(String[] args) throws Exception {
+        Profiles.Profile first=new Profiles.Profile(true),second=new Profiles.Profile(true);
+        StickCalibration.Capture rest=new StickCalibration.Capture(true);
+        StickCalibration.Capture travel=new StickCalibration.Capture(false);
+        for(int k=0;k<24;k++) {
+            rest.sample(10+(k%2),-5,k*50);
+            travel.sample(k%2==0?-88:99,k%2==0?108:-104,k*50);
+        }
+        expect(rest.ready(first.left.calibration,1150),"stable center");
+        rest.apply(first.left.calibration);
+        expect(travel.ready(first.left.calibration,1150),"all directions");
+        travel.apply(first.left.calibration);
+        Profiles.Profile savedCalibration=new Profiles.Profile(true);savedCalibration.decode(first.encode());
+        expect(savedCalibration.left.calibration.normalized(0,11)==0 && savedCalibration.left.calibration.normalized(1,-5)==0,"restored center");
+        expect(savedCalibration.left.calibration.normalized(0,99)==1 && savedCalibration.left.calibration.normalized(1,-104)==-1,"restored travel");
+        expect(second.left.calibration.normalized(0,11)>0 && first.right.calibration.normalized(0,11)>0,"independent slot and stick");
+        expect(!rest.ready(first.left.calibration,3000),"stale sample");
+        StickCalibration.Capture partial=new StickCalibration.Capture(false);
+        for(int k=0;k<30;k++)partial.sample(k%2==0?100:-110,0,k*50);
+        expect(!partial.ready(first.left.calibration,1450),"incomplete travel");
         for(boolean s:new boolean[]{true,false}) {
             Profiles.Profile p=new Profiles.Profile(s);
+            expect(p.map[Profiles.LB]==Profiles.VOLUME_UP && p.map[Profiles.RB]==Profiles.VOLUME_DOWN,"volume defaults");
+            int[] choices=Profiles.assignableActions(s);
+            expect(java.util.Arrays.binarySearch(choices,Profiles.OLD_GYRO_ZERO)<0 &&
+                java.util.Arrays.binarySearch(choices,Profiles.VOLUME_UP)>=0 &&
+                java.util.Arrays.binarySearch(choices,Profiles.VOLUME_DOWN)>=0,"assignable volume controls");
+            JSONObject oldBindings=new JSONObject(p.encode());
+            oldBindings.remove("volumeBindings");
+            oldBindings.getJSONArray("buttons").put(Profiles.LB,s?1:0).put(Profiles.RB,17).put(13,15);
+            p.decode(oldBindings.toString());
+            expect(p.map[Profiles.LB]==Profiles.VOLUME_UP && p.map[Profiles.RB]==17 && p.map[13]==0,"migrate defaults and retain custom bindings");
+            p.map[Profiles.LB]=1;
+            p.decode(p.encode());
+            expect(p.map[Profiles.LB]==1,"explicit unassigned shoulder survives save");
             for(Profiles.Stick stick:new Profiles.Stick[]{p.left,p.right}) {
                 for(int kind=0;kind<4;kind++) {
                     stick.preset(kind);

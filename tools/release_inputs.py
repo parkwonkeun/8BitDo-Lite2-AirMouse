@@ -7,7 +7,7 @@ BASE_URL = 'http://dl.8bitdo.com:8080/firmwareFile/upload/8807004b-61a7-49f4-877
 BASE_SHA = '121c1df789577997572373d049bfa245eb1fdae231223b0bb37463b257d3e27f'
 UPDATER_URL = 'https://download.8bitdo.com/Tools/FirmwareUpdater/8BitDo_Firmware_Updater_Win.zip'
 UPDATER_SHA = '88fd6af7eb62a33546415db75a40907ef9120d14f10c6cd7a4337ea59994a26f'
-R31_SHA = '1579fb6cfb3ae4f68049504e828c0660bd5459901b736329777fe52f1e9f604b'
+R33_SHA = '988f98dfb539299414aff78a2565cfa6a5c6f550f33c5c178d45ad624ff26f62'
 
 
 def verify(data, expected, label):

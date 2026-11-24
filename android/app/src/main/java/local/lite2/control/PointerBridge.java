@@ -69,8 +69,11 @@ final class PointerBridge implements AutoCloseable {
         appendCurve(line,profile.left);
         appendCurve(line,profile.right);
         line.append(profile.clickHold?" 1":" 0");
+        for(Profiles.Stick stick:new Profiles.Stick[]{profile.left,profile.right})
+            for(int[] axis:stick.calibration.axis)for(int value:axis)line.append(' ').append(value);
         profileLine=route==MONITOR?"P "+line:line.toString();
     }
+    void sampleStick(boolean left){profileLine=left?"K 1":"K 2";}
     // Send the same Hermite knots and slopes used to draw the graph.
     private static void appendCurve(StringBuilder line,Profiles.Stick stick) {
         int first=stick.firstKnot(),last=stick.lastKnot();
@@ -148,7 +151,9 @@ final class PointerBridge implements AutoCloseable {
     }
     private void backgroundSlot(boolean s,int down) {
         int active=store.active(s);
-        int next=Profiles.slotForPresses(store.navigation(s),active,down);
+        Profiles.Profile current=store.navigation(s);
+        store.applyVolumePresses(current,active,down);
+        int next=Profiles.slotForPresses(current,active,down);
         if(next==Profiles.NO_CHANGE || next==active)return;
         store.select(s,next);
         if(s)background(token,store);

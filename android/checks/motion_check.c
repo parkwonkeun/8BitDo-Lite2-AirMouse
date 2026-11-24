@@ -166,6 +166,14 @@ static void test_monitor_pointer(void) {
     close(pair[0]);close(pair[1]);
 }
 int main(int argc,char **argv) {
+    struct profile measured={0};
+    const char *calibrated="F 100 100 3 0 0 0 50 50 1 100 100 1 3 0 0 0 50 50 1 100 100 1 1 -80 10 12 92 -90 -9 -7 70 -100 3 4 96 -64 5 7 88";
+    assert(parse_profile(calibrated,&measured));
+    assert(slot_axis(&measured,0,11)==0 && slot_axis(&measured,1,-8)==0);
+    assert(slot_axis(&measured,0,92)==127 && slot_axis(&measured,0,-80)==-127);
+    assert(slot_axis(&measured,0,52)==63.5 && slot_axis(&measured,0,120)==127);
+    assert(slot_axis(&measured,3,6)==0 && slot_axis(&measured,3,-64)==-127);
+    assert(slot_axis(&measured,2,96)==127);
     if(argc==2 && !strcmp(argv[1],"--rest-replay")) {replay_gyro_zero();return 0;}
     test_monitor_pointer();
     test_gyro_cadence();

@@ -44,6 +44,9 @@ def main():
     # Each instruction is a literal run or a flash offset plus a run length.
     from package_patch import MOUSE
     sources=[(0xa3ea, MOUSE+KEYBOARD+CONSUMER), (0xaee2,original[0x12ee2:0x130ba])]
+    # Additional immutable spans after the final code hook and outside the S USB descriptor.
+    for start,end in ((0x2440,0x7844),(0x7c00,0xa3ea),(0xa4b5,0xbe00)):
+        sources.append((start,original[0x8000+start:0x8000+end]))
     record=bytes(sdp)+device_id
     best=[b'']*(len(record)+1)
     for i in reversed(range(len(record))):
@@ -59,13 +62,13 @@ def main():
     (ROOT/'build/mouse_sdp.c').write_text(
         'const unsigned char lite2_sdp_recipe[] = {'+','.join(map(str,best[0]))+'};\n'
         'const unsigned lite2_mouse_sdp_size = '+str(len(record))+';\n')
-    run('arm-none-eabi-gcc', '-mcpu=cortex-m0', '-mthumb', '-Oz', '-flto', '-fno-ipa-cp', '-fno-tree-fre', '-fno-tree-sink', '-fno-tree-dominator-opts', '-fno-inline-functions-called-once', 
+    run('arm-none-eabi-gcc', '-mcpu=cortex-m0', '-mthumb', '-Oz', '-flto', '-fno-reorder-blocks', '-fno-code-hoisting', '-fno-move-loop-invariants', '-fno-tree-loop-optimize', '-fno-ipa-cp', '-fno-tree-fre', '-fno-tree-sink', '-fno-tree-dominator-opts', '-fno-inline-functions-called-once',
         *['-Wl,-u,'+name for name in ('memset','mouse_reset','mouse_step','lite2_start','lite2_scan','lite2_scan_delay','lite2_dispatch','lite2_switch_commands','lite2_set_device_class','lite2_scan_pressure','lite2_set_sdp','lite2_mouse_name','lite2_player_lights')], '-std=c11',
         '-Wall', '-Wextra', '-Werror', '-ffreestanding', '-fno-builtin',
         '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-nostdlib',
         '-Wl,-T,src/patch.ld', '-Wl,-Map,build/mouse.map', 'src/mouse_core.c',
-        'src/lite2_v106_adapter.c', 'build/mouse_sdp.c', '-lgcc', '-o', 'build/mouse.elf')
-    run('arm-none-eabi-objcopy', '-O', 'binary', 'build/mouse.elf', 'build/mouse.bin')
+        'src/gravity.c','src/lite2_v106_adapter.c', 'build/mouse_sdp.c', '-lgcc', '-o', 'build/mouse.elf')
+    run('arm-none-eabi-objcopy','-R','.gravity','-O','binary','build/mouse.elf','build/mouse.bin')
     run('arm-none-eabi-size', 'build/mouse.elf')
 
 if __name__ == '__main__': main()

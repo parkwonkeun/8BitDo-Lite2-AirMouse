@@ -41,7 +41,7 @@ class PatchTests(unittest.TestCase):
         bt,relative=parse_hid(BT_MOUSE)
         self.assertEqual(bt,{(8,1):136,(11,6):8})
         self.assertEqual(relative[-1],(8,1,[0x38]))
-        data=(ROOT/'build/Lite2AirMouse-v106-s-mode-r31.bin').read_bytes()
+        data=(ROOT/'build/Lite2AirMouse-v106-s-mode-r33.bin').read_bytes()
         original=(ROOT/'outputs/Lite2-v1.06-decrypted-analysis-only.bin').read_bytes()
         usb,_=parse_hid(data[0x123ea:0x124b5])
         self.assertEqual(usb,{(8,1):128,(8,2):504,(8,3):504,(8,4):64,(8,5):8,(9,0x81):504})
@@ -51,7 +51,7 @@ class PatchTests(unittest.TestCase):
 
     def test_s_mouse_radio_policy_only_after_registration(self):
         machine=Machine()
-        image=(ROOT/'build/Lite2AirMouse-v106-s-mode-r31.bin').read_bytes()
+        image=(ROOT/'build/Lite2AirMouse-v106-s-mode-r33.bin').read_bytes()
         machine.u.mem_write(0x1018000,image)
         # Reproduce startup's stock data-table initialization from this image.
         machine.symbols['init_data']=0x10187fe
@@ -92,13 +92,13 @@ class PatchTests(unittest.TestCase):
 
     def test_wireless_dispatch_and_buttons(self):
         m=Machine();u=m.u
-        image=(ROOT/'build/Lite2AirMouse-v106-s-mode-r31.bin').read_bytes()
+        image=(ROOT/'build/Lite2AirMouse-v106-s-mode-r33.bin').read_bytes()
         u.mem_write(0x1018000,image)
         packets=[];usb_packets=[];original_calls=[]
         sensor_reads=[]
         def sensor(uc,address,size,data):
             sensor_reads.append(address)
-            uc.mem_write(uc.reg_read(UC_ARM_REG_R0),struct.pack('<6h',0,0,4096,0,1024 if data[0] else 0,-2048 if data[0] else 0))
+            uc.mem_write(uc.reg_read(UC_ARM_REG_R0),struct.pack('<6h',0,0,4096,0,0,-2048 if data[0] else 0))
             uc.reg_write(UC_ARM_REG_R0,1)
             uc.reg_write(UC_ARM_REG_PC,uc.reg_read(UC_ARM_REG_LR))
         moving=[False]
@@ -161,11 +161,11 @@ class PatchTests(unittest.TestCase):
             self.assertEqual(len(packets[-1]),19)
             mouse=struct.unpack_from('<BhhbhhhHH',packets[-1],2)
             self.assertEqual(mouse[0],expected)
-            self.assertEqual((mouse[4],mouse[5],mouse[6]&2047),(2048,1024,1408))
+            self.assertEqual((mouse[4],mouse[5],mouse[6]&2047),(2048,0,1408))
             if expected:
                 self.assertEqual(mouse[1:3],(0,0))
             else:
-                self.assertIn(mouse[1:3],((180,40),(360,80)))
+                self.assertIn(mouse[1:3],((180,0),(360,0)))
         # Execute the actual interval-event entry for S and D. Stock passes
         # the radio interval unchanged for D; S programs the supported 5ms tick.
         applied=[]
@@ -227,8 +227,27 @@ class PatchTests(unittest.TestCase):
                 x,y,tag,low,high=struct.unpack_from('<hhHHH',frame,8)
                 self.assertEqual((x,y,tag&2047),(16,-9,1664))
                 self.assertEqual(((low-1)//512-1,(high-1)//512-1,tag>>11),(18,14,16))
+                center=m.symbols['lite2_stick_centers']
+                self.assertEqual(bytes(u.mem_read(center,8)),bytes([128])*8)
+                # Synthetic widened neutral zone for this emulated test only.
+                u.mem_write(center,bytes([120]*4+[136]*4))
+                start=len(packets)
+                resting=[0x88888888,0x80808080,0x7c84847c,0x78787878]
+                for i in range(400):m.call('lite2_dispatch',0,resting[i%len(resting)],0)
+                rest=[f for f in packets[start:] if f[1]==1]
+                self.assertGreater(len(rest),350)
+                for frame in rest[12:]:
+                    self.assertEqual(struct.unpack_from('<hh',frame,3),(0,0))
+                    self.assertEqual(struct.unpack_from('<hh',frame,8),(0,0))
+                for x,y in [(0,255),(255,0),(75,200),(200,75)]:
+                    for _ in range(4):m.call('lite2_dispatch',0,0x80800000|(y<<8)|x,0)
+                    frame=next(f for f in reversed(packets) if f[1]==1)
+                    def normalized(v):
+                        return int((v-120)*128/120) if v<120 else int(max(0,v-136)*127/(255-136))
+                    self.assertEqual(struct.unpack_from('<hh',frame,8),(normalized(x),normalized(y)))
+                u.mem_write(center,bytes([128])*8)
 
-        u.mem_write(0x2fe38,struct.pack('<I',1))  # Adapter.active is set by lite2_scan.
+        u.mem_write(0x2fe50,struct.pack('<I',1))  # Adapter.active is set by lite2_scan.
         m.symbols['stock_led_entry']=0x1022428
         m.call('stock_led_entry',0x4000,1)
         self.assertEqual(leds[-1],(0x100,1))
@@ -314,7 +333,7 @@ class PatchTests(unittest.TestCase):
             calls.append(bytes(uc.mem_read(ptr,length)))
             uc.reg_write(UC_ARM_REG_R0,1);uc.reg_write(UC_ARM_REG_PC,uc.reg_read(UC_ARM_REG_LR))
         m.u.hook_add(UC_HOOK_CODE,set_sdp,begin=0x101a6fc,end=0x101a6fc)
-        m.u.mem_write(0x1018000,(ROOT/'build/Lite2AirMouse-v106-s-mode-r31.bin').read_bytes())
+        m.u.mem_write(0x1018000,(ROOT/'build/Lite2AirMouse-v106-s-mode-r33.bin').read_bytes())
         m.call('lite2_set_sdp',0x20290,553)
         desc=BT_MOUSE+KEYBOARD+CONSUMER
         self.assertIn(desc,calls[0])

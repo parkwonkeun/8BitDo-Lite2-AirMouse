@@ -8,7 +8,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-adb -d install -r Lite2Control-0.3.12.apk
+adb -d install -r Lite2Control-0.3.15.apk
 if errorlevel 1 (
   echo Connect one tablet via USB and accept the debugging prompt.
   pause
