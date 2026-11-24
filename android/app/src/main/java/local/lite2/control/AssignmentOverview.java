@@ -8,10 +8,10 @@ import android.widget.FrameLayout;
 final class AssignmentOverview extends HorizontalScrollView {
     interface Listener { void choose(AssignmentOverview view,int index); }
     private final AssignmentPad pad;
-    AssignmentOverview(Context context,Listener listener) {
+    AssignmentOverview(Context context,int slot,Listener listener) {
         super(context);
         setFillViewport(true);
-        pad=new AssignmentPad(context,(p,i)->listener.choose(this,i));
+        pad=new AssignmentPad(context,(p,i)->listener.choose(this,i),slot);
         int minWidth=Math.round(720*getResources().getDisplayMetrics().density);
         addView(pad,new FrameLayout.LayoutParams(minWidth,-2));
     }

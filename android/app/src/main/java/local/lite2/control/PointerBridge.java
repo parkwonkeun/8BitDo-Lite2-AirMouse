@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 
 final class PointerBridge implements AutoCloseable {
     private static PointerBridge instance;
-    interface ButtonListener { void changed(int held,int down,int up); }
+    interface ButtonListener { void changed(int held,int down,int up,int source); }
     private final android.os.Handler main=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Profiles store;
     interface StickListener { void changed(int x,int y,int rx,int ry); }
@@ -16,18 +16,23 @@ final class PointerBridge implements AutoCloseable {
     interface WheelListener { void changed(int direction); }
     WheelListener wheel;
     private int previousGamepad=-1;
-    interface GyroListener { void changed(int dx,int dy); }
-    private volatile GyroListener gyro;
-    private boolean supportsGyro;
-    void monitorGyro(GyroListener listener) { gyro=listener; }
+    private boolean supportsGyro,supportsSpeed,supportsWheelSpeed,supportsRawButtons;
+    volatile String peer;
     static final char DIRECT='?', MONITOR='!', REMAP='\n';
     final char route;
     private ButtonListener buttons;
     volatile boolean hasButtonReports;
+    private final Profiles.SpeedGesture speedGesture=new Profiles.SpeedGesture();
     private int previousButtons=-1;
+    private final Profiles.SlotPress sPress=new Profiles.SlotPress(),dPress=new Profiles.SlotPress();
+    int slotOnRelease(boolean s,Profiles.Profile p,int active,int held,int down) {
+        return (s?sPress:dPress).update(p,active,held,down);
+    }
+    void resetSlotPress(boolean s){(s?sPress:dPress).reset();}
     private final String token;
     private volatile Runnable changed;
-    private volatile String profileLine;
+    private volatile String profileLine,gamepadLine;
+    private boolean physicalGamepad,supportsGamepadCurves;
     private volatile boolean running=true;
     volatile boolean connected;
     private volatile Socket socket;
@@ -46,8 +51,9 @@ final class PointerBridge implements AutoCloseable {
     }
     private static void background(String token,Profiles store) {
         Profiles.Profile profile=store.load(true,store.active(true));
-        PointerBridge bridge=attach(token,null,null,null,store,profile,profile==null?DIRECT:REMAP);
+        PointerBridge bridge=attach(token,null,null,null,store,profile,store.active(true)==Profiles.RAW?DIRECT:REMAP);
         bridge.set(profile);
+        bridge.setGamepadRaw(null);
     }
     static synchronized void release() {
         if(instance!=null) {
@@ -56,22 +62,47 @@ final class PointerBridge implements AutoCloseable {
         }
     }
     boolean usesToken(String value) {return token.equals(value);}
-    void detach(Runnable listener) {if(changed==listener){changed=null;buttons=null;sticks=null;gyro=null;gamepad=null;wheel=null;}}
+    void detach(Runnable listener) {if(changed==listener){changed=null;buttons=null;sticks=null;gamepad=null;wheel=null;}}
     private PointerBridge(String token,Profiles store,Profiles.Profile profile,char route) {
         this.token=token;this.store=store;this.route=route;
         set(profile);
+        setGamepadRaw(null);
         thread=new Thread(this::run,"lite2-pointer-bridge");
         thread.start();
     }
     void set(Profiles.Profile profile) {
-        if(profile==null || route==DIRECT){profileLine=route==MONITOR?"P RAW":"H";return;}
-        StringBuilder line=new StringBuilder("F ").append(profile.gyroMax).append(' ').append(profile.gyroMax);
+        if(route==DIRECT && profile!=null) {
+            profileLine=buttonLine("R",profile);
+            return;
+        }
+        if(profile==null){profileLine=route==MONITOR?"P RAW":"H";return;}
+        String line=curveLine(profile);
+        profileLine=route==MONITOR?"P "+line:line;
+    }
+    private static String curveLine(Profiles.Profile profile){
+        StringBuilder line=new StringBuilder("F ")
+            .append(profile.gyroMax*profile.horizontalGyroPercent()/100.0).append(' ')
+            .append(profile.gyroMax*profile.verticalGyroPercent()/100.0);
         appendCurve(line,profile.left);
         appendCurve(line,profile.right);
         line.append(profile.clickHold?" 1":" 0");
         for(Profiles.Stick stick:new Profiles.Stick[]{profile.left,profile.right})
             for(int[] axis:stick.calibration.axis)for(int value:axis)line.append(' ').append(value);
-        profileLine=route==MONITOR?"P "+line:line.toString();
+        line.append(' ').append(profile.stickSpeed).append(' ').append(profile.map[Profiles.LT])
+            .append(' ').append(profile.map[Profiles.RT]).append(' ').append(profile.wheelSpeed);
+        return line.toString();
+    }
+    private static String buttonLine(String prefix,Profiles.Profile profile) {
+        StringBuilder line=new StringBuilder(prefix);
+        for(int index:Profiles.SCAN_BUTTON)line.append(' ').append(profile.map[index]);
+        return line.toString();
+    }
+    void setGamepadRaw(Profiles.Profile draft) {
+        setGamepadProfile(draft,store.active(false));
+    }
+    void setGamepadProfile(Profiles.Profile draft,int slot){
+        if(draft==null){slot=store.active(false);draft=store.load(false,slot);}
+        gamepadLine=buttonLine("J",draft)+(slot==Profiles.RAW?"":" |"+curveLine(draft));
     }
     void sampleStick(boolean left){profileLine=left?"K 1":"K 2";}
     // Send the same Hermite knots and slopes used to draw the graph.
@@ -102,7 +133,7 @@ final class PointerBridge implements AutoCloseable {
             main.post(()->{
                 if(!running)return;
                 if(gamepad!=null)gamepad.changed(values,down,up);
-                else if(route!=MONITOR && down!=0)backgroundSlot(false,down);
+                else if(route!=MONITOR && (down|up)!=0)backgroundSlot(false,held,down,0);
             });
             return true;
         }
@@ -120,22 +151,24 @@ final class PointerBridge implements AutoCloseable {
             main.post(()->{if(running && wheel!=null)wheel.changed(direction);});
             return true;
         }
+        if("G DCURVE1".equals(line)){supportsGamepadCurves=true;return true;}
+        if("G GAMEPAD".equals(line)){physicalGamepad=true;return true;}
+        if("G RAW1".equals(line)){supportsRawButtons=true;return true;}
+        if("G CAPS5".equals(line)){supportsWheelSpeed=true;return true;}
+        if("G CAPS4".equals(line)){supportsSpeed=true;return true;}
         if("G CAPS3".equals(line)){supportsGyro=true;return true;}
         if("G CAPS2".equals(line))return true;
-        if(line!=null && line.startsWith("G ")) {
-            if(!supportsGyro || gyro==null)return true;
-            String[] axes=line.substring(2).split(" ");
-            if(axes.length!=2)return false;
-            try {
-                final int dx=Integer.parseInt(axes[0]),dy=Integer.parseInt(axes[1]);
-                final GyroListener target=gyro;
-                main.post(()->{if(running && target!=null && target==gyro)target.changed(dx,dy);});
-            } catch(NumberFormatException invalid){return false;}
+        if(line!=null && line.startsWith("U ")) {
+            peer=line.substring(2).toUpperCase(java.util.Locale.ROOT);
+            Runnable callback=changed;if(callback!=null)callback.run();
             return true;
         }
+        if(line!=null && line.startsWith("G "))return true;
         if(line==null || !line.startsWith("B "))return false;
-        int mask;
-        try {mask=Integer.parseInt(line.substring(2));}catch(NumberFormatException bad){return false;}
+        int mask,source;
+        String[] fields=line.substring(2).split(" ");
+        if(fields.length<1 || fields.length>2)return false;
+        try {mask=Integer.parseInt(fields[0]);source=fields.length==2?Integer.parseInt(fields[1]):0;}catch(NumberFormatException bad){return false;}
         if(mask<0 || mask>=1<<18)return false;
         int old=previousButtons;
         previousButtons=mask;hasButtonReports=true;
@@ -143,23 +176,29 @@ final class PointerBridge implements AutoCloseable {
         int up=old<0?0:old & ~mask;
         main.post(()->{
             if(!running)return;
-            if(buttons!=null) {buttons.changed(mask,down,up);return;}
+            if(buttons!=null) {buttons.changed(mask,down,up,source);return;}
             if(route==MONITOR)return;
-            if(down!=0)backgroundSlot(true,down);
+            backgroundSlot(true,mask,down,source);
         });
         return true;
     }
-    private void backgroundSlot(boolean s,int down) {
+    private void backgroundSlot(boolean s,int held,int down,int source) {
         int active=store.active(s);
         Profiles.Profile current=store.navigation(s);
+        if(active==Profiles.RAW)speedGesture.reset();
+        if(s && active!=Profiles.RAW && speedGesture.adjust(current,active,source,held,down,android.os.SystemClock.uptimeMillis())) {
+            store.saveSpeed(active,current,source);
+            set(current);
+        }
         store.applyVolumePresses(current,active,down);
-        int next=Profiles.slotForPresses(current,active,down);
+        int next=slotOnRelease(s,current,active,held,down);
         if(next==Profiles.NO_CHANGE || next==active)return;
         store.select(s,next);
-        if(s)background(token,store);
+        if(s)background(token,store);else setGamepadRaw(null);
     }
     private void run() {
         while(running) {
+            boolean opened=false;
             try(Socket connection=new Socket()) {
                 socket=connection;
                 connection.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),39728),1200);
@@ -169,22 +208,24 @@ final class PointerBridge implements AutoCloseable {
                 BufferedWriter out=new BufferedWriter(new OutputStreamWriter(connection.getOutputStream(),StandardCharsets.US_ASCII));
                 out.write(token);out.write(route);out.flush();
                 if(!"OK".equals(in.readLine()))throw new IOException("No physical input");
-                supportsGyro=false;
-                boolean subscribed=false;
+                opened=true;
+                physicalGamepad=supportsGamepadCurves=supportsRawButtons=supportsGyro=supportsSpeed=supportsWheelSpeed=false;
                 String previous=null;
                 long last=0;
                 while(running) {
                     long now=android.os.SystemClock.uptimeMillis();
                     while(in.ready())if(!inputEvent(in.readLine()))throw new IOException("Invalid event");
                     String line=route==MONITOR && !supportsGyro?"H":profileLine;
-                    boolean requested=gyro!=null;
-                    if(supportsGyro && requested!=subscribed) {
-                        out.write(requested?"M 1\n":"M 0\n");out.flush();
-                        String reply;
-                        do {reply=in.readLine();} while(inputEvent(reply));
-                        if(!"OK".equals(reply))break;
-                        subscribed=requested;
+                    if(physicalGamepad && route!=MONITOR){
+                        line=gamepadLine;
+                        int curves=line.indexOf(" |");
+                        if(curves>=0 && !supportsGamepadCurves)line=line.substring(0,curves);
                     }
+                    if(!supportsRawButtons && line.startsWith("R "))line="H";
+                    if(!supportsWheelSpeed && (line.startsWith("F ") || line.startsWith("P F ")))
+                        line=line.substring(0,line.lastIndexOf(' '));
+                    if(!supportsSpeed && (line.startsWith("F ") || line.startsWith("P F ")))
+                        for(int i=0;i<3;i++)line=line.substring(0,line.lastIndexOf(' '));
                     if(!line.equals(previous) || now-last>=450) {
                         out.write(line.equals(previous)?"H":line);out.newLine();out.flush();
                         String reply;
@@ -197,8 +238,10 @@ final class PointerBridge implements AutoCloseable {
             } catch(IOException disconnected) {
                 // Reopen after Bluetooth or app lifecycle changes.
             } catch(InterruptedException stopped) {break;}
-            finally {socket=null;hasButtonReports=false;previousButtons=previousGamepad=-1;state(false);}
-            try {Thread.sleep(750);} catch(InterruptedException stopped) {break;}
+            finally {socket=null;peer=null;hasButtonReports=false;previousButtons=previousGamepad=-1;
+                main.post(()->{sPress.reset();dPress.reset();});state(false);}
+            if(opened && route==MONITOR)continue;
+            try {Thread.sleep(route==MONITOR?100:750);} catch(InterruptedException stopped) {break;}
         }
     }
     @Override public void close() {

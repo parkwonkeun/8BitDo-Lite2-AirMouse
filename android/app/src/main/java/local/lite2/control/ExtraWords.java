@@ -5,6 +5,20 @@ import java.util.Map;
 
 final class ExtraWords {
     static void addTo(Map<String,String[]> out) {
+        put(out,"★ 버튼을 눌러 동작을 바꾸세요.","Touchez ★ pour changer son action.","Tippe auf ★, um die Funktion zu ändern.","Toca ★ para cambiar su función.","Tocca ★ per cambiarne la funzione.","Toque em ★ para mudar a função.","Нажмите ★, чтобы изменить действие.");
+        put(out,"앱 업데이트","Mise à jour de l’application","App-Update","Actualizar aplicación","Aggiorna app","Atualizar aplicativo","Обновление приложения");
+        put(out,"업데이트 확인 중…","Recherche de mise à jour…","Suche nach Updates…","Buscando actualizaciones…","Ricerca aggiornamenti…","Verificando atualizações…","Поиск обновлений…");
+        put(out,"설치된 버전 %s · GitHub 버전 %s","Version installée %s · GitHub %s","Installiert %s · GitHub %s","Instalada %s · GitHub %s","Installata %s · GitHub %s","Instalada %s · GitHub %s","Установлена %s · GitHub %s");
+        put(out,"다운로드 중…","Téléchargement…","Wird heruntergeladen…","Descargando…","Download in corso…","Baixando…","Загрузка…");
+        put(out,"업데이트 실패","Échec de la mise à jour","Update fehlgeschlagen","Error de actualización","Aggiornamento non riuscito","Falha na atualização","Не удалось обновить");
+        put(out,"자이로 축 비율","Équilibre des axes du gyroscope","Gyro-Achsenbalance","Equilibrio de ejes del giroscopio","Bilanciamento assi del giroscopio","Equilíbrio dos eixos do giroscópio","Баланс осей гироскопа");
+        put(out,"수평","Horizontal","Horizontal","Horizontal","Orizzontale","Horizontal","Горизонталь");
+        put(out,"수직","Vertical","Vertikal","Vertical","Verticale","Vertical","Вертикаль");
+        put(out,"휠 속도","Vitesse de défilement","Scrollgeschwindigkeit","Velocidad de desplazamiento","Velocità di scorrimento","Velocidade de rolagem","Скорость прокрутки");
+        put(out,"스틱 속도","Vitesse du stick","Stickgeschwindigkeit","Velocidad de la palanca","Velocità stick","Velocidade do analógico","Скорость стика");
+        put(out,"포인터 속도 높이기","Accélérer le pointeur","Zeiger beschleunigen","Aumentar velocidad del puntero","Aumenta velocità puntatore","Aumentar velocidade do ponteiro","Ускорить указатель");
+        put(out,"포인터 속도 낮추기","Ralentir le pointeur","Zeiger verlangsamen","Reducir velocidad del puntero","Riduci velocità puntatore","Reduzir velocidade do ponteiro","Замедлить указатель");
+        put(out,"슬롯 전환","Parcourir les profils","Slots durchschalten","Recorrer perfiles","Scorri gli slot","Alternar perfis","Переключать слоты");
         put(out,"스틱 보정","Calibrage des sticks","Stickkalibrierung","Calibración de sticks","Calibrazione stick","Calibração dos analógicos","Калибровка стиков");
         put(out,"최소 / 영점 / 최대","Minimum / centre / maximum","Minimum / Mitte / Maximum","Mínimo / centro / máximo","Minimo / centro / massimo","Mínimo / centro / máximo","Минимум / центр / максимум");
         put(out,"영점 측정","Mesurer le centre","Mitte messen","Medir centro","Misura il centro","Medir centro","Измерить центр");
@@ -75,6 +89,7 @@ final class ExtraWords {
         put(out,"기본값","Valeurs par défaut","Standardwerte","Valores iniciales","Valori predefiniti","Padrões","По умолчанию");
         put(out,"저장 전 값","Rétablir la sauvegarde","Letzten Stand laden","Restaurar guardado","Ripristina salvato","Restaurar salvo","Вернуть сохранённое");
         put(out,"프로필 미리보기 · 현재 패드 펌웨어로 설정을 보내는 기능은 준비 중입니다.","Aperçu du profil · l’envoi des réglages à la manette n’est pas encore disponible.","Profilvorschau · Einstellungen können noch nicht an das Gamepad gesendet werden.","Vista previa · aún no se pueden enviar ajustes al mando.","Anteprima · l’invio delle impostazioni al gamepad non è ancora disponibile.","Prévia do perfil · o envio ao controle ainda não está disponível.","Предпросмотр · отправка настроек на геймпад пока недоступна.");
+        put(out,"정면 맞추기","Recentrer","Ausrichten","Centrar rumbo","Centra direzione","Centralizar direção","Задать направление");
         put(out,"자이로","Gyroscope","Gyroskop","Giroscopio","Giroscopio","Giroscópio","Гироскоп");
         put(out,"좌우·상하 민감도와 자동 모드의 유지 시간을 별도로 설정합니다.","Réglez la sensibilité horizontale et verticale ainsi que le délai du mode auto.","Horizontale und vertikale Empfindlichkeit sowie Haltezeit im Automatikmodus einstellen.","Ajusta la sensibilidad horizontal, vertical y el tiempo de espera del modo automático.","Regola la sensibilità orizzontale, verticale e il tempo di mantenimento della modalità automatica.","Ajuste a sensibilidade horizontal, vertical e o tempo de retenção do modo automático.","Настройте чувствительность по горизонтали и вертикали, а также задержку авторежима.");
         put(out,"클릭 시 자이로 고정 (0.2초)","Stabiliser le gyroscope au clic (0,2 s)","Gyro beim Klicken stabilisieren (0,2 s)","Estabilizar el giroscopio al hacer clic (0,2 s)","Stabilizza il giroscopio al clic (0,2 s)","Estabilizar o giroscópio ao clicar (0,2 s)","Стабилизация гироскопа при щелчке (0,2 с)");

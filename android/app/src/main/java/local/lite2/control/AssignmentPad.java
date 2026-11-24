@@ -52,16 +52,17 @@ final class AssignmentPad extends ViewGroup {
     private float sx, sy, left;
     private int selected=-1;
 
-    AssignmentPad(Context context,Listener listener) {
+    AssignmentPad(Context context,Listener listener,int slot) {
         super(context);
         density=getResources().getDisplayMetrics().density;
         labeled=listener!=null;
         setWillNotDraw(false);
         for(int i=0;i<KEYS.length;i++) {
             final int index=i;
-            Cap cap=new Cap(context,KEYS[i]);
-            if(labeled)cap.setOnClickListener(v->listener.choose(this,index));
-            else {cap.setClickable(false);cap.setFocusable(false);cap.setContentDescription(Profiles.BUTTONS[i]);}
+            int face=Profiles.faceIndex(slot,i);
+            Cap cap=new Cap(context,KEYS[i],KEYS[face].legend);
+            if(labeled && (!Profiles.fixedLayout(false,slot) || i==Profiles.STAR))cap.setOnClickListener(v->listener.choose(this,index));
+            else {cap.setClickable(false);cap.setFocusable(false);cap.setContentDescription(Profiles.BUTTONS[face]);if(labeled)cap.setEnabled(false);}
             addView(cap);
         }
         if(labeled)for(int i=0;i<KEYS.length;i++) {
@@ -72,7 +73,8 @@ final class AssignmentPad extends ViewGroup {
             label.setMaxLines(2);
             label.setEllipsize(android.text.TextUtils.TruncateAt.END);
             label.setIncludeFontPadding(false);
-            label.setOnClickListener(v->listener.choose(this,index));
+            if(!Profiles.fixedLayout(false,slot) || i==Profiles.STAR)label.setOnClickListener(v->listener.choose(this,index));
+            else label.setEnabled(false);
             captions[i]=label;
             addView(label);
         }
@@ -160,9 +162,10 @@ final class AssignmentPad extends ViewGroup {
         private final Key key;
         private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        Cap(Context context,Key key) {
+        private final String legend;
+        Cap(Context context,Key key,String legend) {
             super(context);
-            this.key=key;
+            this.key=key;this.legend=legend;
             setPadding(0,0,0,0);
             setBackground(null);
             setStateListAnimator(null);
@@ -210,7 +213,7 @@ final class AssignmentPad extends ViewGroup {
             p.setColor(lit?HIGHLIGHT:LEGEND);
             float size=key.shape==Shape.STICK||key.shape==Shape.SHOULDER?16:21;
             p.setTextSize(Math.max(size,12*density/scale));
-            canvas.drawText(key.legend,0,-(p.ascent()+p.descent())/2,p);
+            canvas.drawText(legend,0,-(p.ascent()+p.descent())/2,p);
             canvas.restoreToCount(saved);
         }
         private void disc(Canvas canvas,int radius,int color) {

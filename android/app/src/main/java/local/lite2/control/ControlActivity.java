@@ -37,6 +37,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     Profiles.Profile profile;
     String savedProfile;
     boolean dirty;
+    private TextView gyroSpeedLabel;
+    private SeekBar gyroSpeedSlider;
+    private TextView stickSpeedLabel,wheelSpeedLabel;
+    private SeekBar wheelSpeedSlider;
     Button saveButton, restoreButton, activeSlotButton;
     TextView editSlotLabel;
     TextView draftStatus;
@@ -51,6 +55,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     LinearLayout root, body, header;
     AssignmentPad monitorPad;
     GyroPreview gyroPreview;
+    private Button zeroHeadingButton;
     int pressedMask;
     CurveView leftGraph, rightGraph;
     float lx,ly,rx,ry;
@@ -62,6 +67,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         store=new Profiles(this);
+        sensors=new PadMonitorGatt(this,new PadMonitorGatt.Listener(){
+            public void sample(byte[] b){onSensorSample(b);}
+            public void disconnected(){resetGyroPreview();}
+        });
         language=Profiles.limit(store.preferences.getInt("language",0),0,Words.COUNT-1);
         inputs=(InputManager)getSystemService(INPUT_SERVICE);
         detectMode();
@@ -73,8 +82,8 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         }
         int active=store.active(modeS);
         int editing=state==null?active:state.getInt("slot",active);
-        openSlot(editing<0 || editing>=Profiles.SLOT_COUNT?active:editing);
-        if(state!=null && slot!=Profiles.RAW) {
+        openSlot(!Profiles.validSlot(modeS,editing)?active:editing);
+        if(state!=null) {
             profile.decode(state.getString("draft"));
             dirty=!profile.encode().equals(savedProfile);
         }
@@ -98,11 +107,36 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(token!=null)startForegroundService(new android.content.Intent(this,SlotService.class));
         pushPointerDraft();
     }
+    private boolean monitorS=true;
+    private PadMonitorGatt sensors;
+    private void resetGyroPreview(){
+        if(gyroPreview!=null)gyroPreview.waitForInput();
+        if(zeroHeadingButton!=null)zeroHeadingButton.setEnabled(false);
+    }
+    private void updateSensors(){
+        if(sensors==null)return;
+        boolean show=resumed && monitorS && !adjustment && gyroPreview!=null && pointerBridge!=null &&
+            pointerBridge.route==PointerBridge.MONITOR && pointerBridge.connected;
+        sensors.configure(show,show?pointerBridge.peer:null);
+    }
+    @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] results){
+        super.onRequestPermissionsResult(code,permissions,results);
+        if(code==54)updateSensors();
+    }
+    private static int signed16(byte[] b,int at){return (short)((b[at]&255)|(b[at+1]<<8));}
+    private void onSensorSample(byte[] b){
+        if(!resumed || adjustment || gyroPreview==null)return;
+        long tick=((b[0]&255L)|(b[1]&255L)<<8|(b[2]&255L)<<16|(b[3]&255L)<<24);
+        gyroPreview.sample(tick,signed16(b,8),signed16(b,10),signed16(b,12),signed16(b,14),signed16(b,16),signed16(b,18));
+        zeroHeadingButton.setEnabled(gyroPreview.hasAttitude());
+        onSticks((b[4]&255)-128,(b[5]&255)-128,(b[6]&255)-128,(b[7]&255)-128);
+    }
     private void onBridgeState() {
+        updateSensors();
         if(pointerBridge==null || !pointerBridge.connected) {
             cancelMonitorHold();
             resetPad();
-            if(gyroPreview!=null)gyroPreview.waitForInput();
+            resetGyroPreview();
         }
         updateStatus();
         updateMonitor();
@@ -152,14 +186,14 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(!focused)cancelMonitorHold();
     }
     private boolean resumed;
-    private void onPhysicalButtons(int held,int down,int up) {
+    private void onPhysicalButtons(int held,int down,int up,int source) {
         if(resumed && !adjustment && !dirty && !modeS)openMode(true);
         checkMonitorHold(displayButtons(held),displayButtons(down));
-        if(modeS) {
+        if(adjustment?modeS:monitorS) {
             pressedMask=displayButtons(held);
             drawPad();
         }
-        if(modeS && !adjustment && (down|up)!=0) {
+        if(monitorS && !adjustment && (down|up)!=0) {
             StringBuilder names=new StringBuilder();
             int shown=held==0?up:held;
             for(int bit=0;bit<Profiles.SCAN_BUTTON.length;bit++)if((shown&(1<<bit))!=0) {
@@ -169,31 +203,47 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             last=t(held==0?"%s · 뗌":"%s · 입력",names.toString());preview="";
             updateMonitor();
         }
-        handleSlotButtons(true,down);
+        handleSlotButtons(true,held,down,source);
     }
     private void onGamepad(int[] values,int down,int up) {
         if(resumed && !adjustment && !dirty && modeS)openMode(false);
         checkMonitorHold(displayButtons(values[0]),displayButtons(down));
-        if(!modeS && resumed)receiveAxes(values[1],values[2],values[3],values[4]);
-        if(!modeS && resumed && !adjustment) {
+        if(!(adjustment?modeS:monitorS) && resumed)receiveAxes(values[1],values[2],values[3],values[4]);
+        if(!monitorS && resumed && !adjustment) {
             pressedMask=displayButtons(values[0]);
             hatBits=0;lt=values[5]/127f;rt=values[6]/127f;
             if((down|up)!=0) {
                 int index=Profiles.SCAN_BUTTON[Integer.numberOfTrailingZeros(down!=0?down:up)];
-                last=t(down!=0?"%s · 입력":"%s · 뗌",Profiles.BUTTONS[index]);
+                last=t(down!=0?"%s · 입력":"%s · 뗌",Profiles.BUTTONS[Profiles.faceIndex(store.active(false),index)]);
             }
             drawPad();updateMonitor();
         }
-        handleSlotButtons(false,down);
+        handleSlotButtons(false,values[0],down,0);
     }
+    private final Profiles.SpeedGesture speedGesture=new Profiles.SpeedGesture();
     private boolean useActiveOnResume;
-    private void handleSlotButtons(boolean s,int down) {
+    private void handleSlotButtons(boolean s,int held,int down,int source) {
         // The monitor displays press edges, including slot bindings, without acting on them.
-        if(down==0 || (resumed && (!adjustment || !hasWindowFocus())))return;
+        if(resumed && (!adjustment || !hasWindowFocus())){speedGesture.reset();if(pointerBridge!=null)pointerBridge.resetSlotPress(s);return;}
         int active=store.active(s);
-        Profiles.Profile current=resumed && modeS==s && active!=Profiles.RAW?profile:store.navigation(s);
+        boolean editing=modeS==s && !useActiveOnResume && (!s || (active==Profiles.RAW)==(slot==Profiles.RAW));
+        Profiles.Profile current=editing?profile:store.navigation(s);
+        int target=editing?slot:active;
+        if(active==Profiles.RAW || stickCapture!=null)speedGesture.reset();
+        if(s && active!=Profiles.RAW && stickCapture==null && speedGesture.adjust(current,target,source,held,down,android.os.SystemClock.uptimeMillis())) {
+            store.saveSpeed(target,current,source);
+            if(editing) {
+                savedProfile=store.load(true,target).encode();
+                if(gyroSpeedSlider!=null){gyroSpeedSlider.setProgress((int)Math.round(current.gyroMax));
+                    if(gyroSpeedLabel!=null)gyroSpeedLabel.setText(t("최대 감도")+"  "+Profiles.speedText(current.gyroMax)+"%");}
+                if(wheelSpeedSlider!=null)wheelSpeedSlider.setProgress((int)Math.round(current.wheelSpeed)-5);
+                if(wheelSpeedLabel!=null)wheelSpeedLabel.setText(t("휠 속도")+"  "+Profiles.speedText(current.wheelSpeed)+"%");
+                if(stickSpeedLabel!=null)stickSpeedLabel.setText(t("스틱 속도")+"  "+Profiles.speedText(current.stickSpeed)+"%");
+                edited();
+            } else if(pointerBridge!=null)pointerBridge.set(current);
+        }
         store.applyVolumePresses(current,active,down);
-        int next=Profiles.slotForPresses(current,active,down);
+        int next=pointerBridge==null?Profiles.NO_CHANGE:pointerBridge.slotOnRelease(s,current,active,held,down);
         if(next==Profiles.NO_CHANGE || next==active)return;
         if(resumed && modeS==s)setSlot(s,next);
         else {
@@ -206,23 +256,25 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     private void pushPointerDraft() {
         if(bridgeToken==null)return;
         int active=store.active(true);
-        Profiles.Profile current=active==Profiles.RAW?null:modeS && !useActiveOnResume?profile:store.load(true,active);
+        boolean previewDraft=modeS && !useActiveOnResume && (slot==Profiles.RAW)==(active==Profiles.RAW);
+        Profiles.Profile current=previewDraft?profile:store.load(true,active);
         char route=resumed && (!adjustment || stickCapture!=null)?PointerBridge.MONITOR:
             active==Profiles.RAW?PointerBridge.DIRECT:PointerBridge.REMAP;
         pointerBridge=PointerBridge.attach(bridgeToken,bridgeStatus,this::onPhysicalButtons,this::onSticks,store,current,route);
+        pointerBridge.setGamepadProfile(!modeS && !useActiveOnResume?profile:null,slot);
         pointerBridge.gamepad=this::onGamepad;
         pointerBridge.wheel=route==PointerBridge.MONITOR?direction->{
             last=direction>0?"휠 위":"휠 아래";
             preview="";
             updateMonitor();
         }:null;
-        pointerBridge.monitorGyro(resumed && modeS && !adjustment && gyroPreview!=null?gyroPreview:null);
+        updateSensors();
         if(stickCapture!=null && route==PointerBridge.MONITOR)pointerBridge.sampleStick(captureLeft);
-        else pointerBridge.set(current);
+        else pointerBridge.set(route==PointerBridge.MONITOR && active==Profiles.RAW?null:current);
     }
     private void drawPad() {
         int mask=pressedMask;
-        if(!modeS)mask|=(hatBits<<4) | (lt>.05f?1<<10:0) | (rt>.05f?1<<11:0);
+        if(!monitorS)mask|=(hatBits<<4) | (lt>.05f?1<<10:0) | (rt>.05f?1<<11:0);
         if(monitorPad!=null)monitorPad.live(mask,lx,ly,rx,ry);
     }
     private void resetPad() {
@@ -230,7 +282,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         pressedMask=hatBits=0; lx=ly=rx=ry=lt=rt=0;drawPad();
     }
     private void onSticks(int x,int y,int rightX,int rightY) {
-        if(!modeS)return;
+        if(!(adjustment?modeS:monitorS))return;
         if(activeMouse==0 && (x!=0 || y!=0 || rightX!=0 || rightY!=0)){activeMouse=1;updateMonitor();}
         receiveAxes(x,y,rightX,rightY);
     }
@@ -241,12 +293,14 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     }
     @Override protected void onPause() {cancelMonitorHold();resumed=false;if(captureDialog!=null)captureDialog.dismiss();pushPointerDraft();super.onPause();}
     @Override public void onDestroy() {
+        if(sensors!=null)sensors.configure(false,null);
         if(pointerBridge!=null) {
             if(isFinishing()) {
                 Profiles.Profile active=store.load(true,store.active(true));
                 pointerBridge=PointerBridge.attach(bridgeToken,bridgeStatus,null,null,store,active,
-                    active==null?PointerBridge.DIRECT:PointerBridge.REMAP);
+                    store.active(true)==Profiles.RAW?PointerBridge.DIRECT:PointerBridge.REMAP);
                 pointerBridge.set(active);
+                pointerBridge.setGamepadRaw(null);
             }
             pointerBridge.detach(bridgeStatus);
         }
@@ -258,14 +312,14 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     @Override public void onInputDeviceChanged(int id) { updateDevice(); }
 
     private boolean isLite(InputDevice device) {
-        if (device==null) return false;
+        if (device==null || device.getName().startsWith("Lite 2 Control")) return false;
         String name=device.getName().toLowerCase(Locale.ROOT);
         return name.contains("lite2 air mouse") || name.contains("lite 2") || name.contains("lite2")
             || (device.getVendorId()==0x2dc8 && device.getProductId()==0x5112)
             || (device.getVendorId()==0x057e && device.getProductId()==0x2009);
     }
     private boolean isS(InputDevice d) {
-        return d.getName().toLowerCase(Locale.ROOT).contains("air mouse")
+        return d.getName().startsWith("Lite2 BLE") || d.getName().toLowerCase(Locale.ROOT).contains("air mouse")
             || d.getProductId()==0x2009
             || (d.supportsSource(InputDevice.SOURCE_MOUSE) && !d.supportsSource(InputDevice.SOURCE_GAMEPAD));
     }
@@ -285,6 +339,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(captureDialog!=null && (device==null || isS(device)!=modeS))captureDialog.dismiss();
         if(device==null)resetPad();
         if(device!=null && isS(device)!=modeS && !dirty) openMode(isS(device));
+        else if(!adjustment && device!=null && isS(device)!=monitorS){resetPad();drawScreen();}
         else updateStatus();
     }
     private void switchMode(boolean s) {
@@ -299,6 +354,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(calibrationMenu!=null)calibrationMenu.dismiss();
         useActiveOnResume=false;
         slot=selected;
+        selectedPadButton=-1;
         profile=store.load(modeS,slot);
         savedProfile=profile==null?null:profile.encode();
         dirty=false;
@@ -341,7 +397,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         }
         if(draftStatus!=null) draftStatus.setText(dirty
             ? t(store.active(modeS)==Profiles.RAW?"저장하지 않은 변경 사항":"저장하지 않은 변경 사항 · 미리보기에 적용 중")
-            : t("슬롯 %d의 저장값",slot+1));
+            : (slot==Profiles.RAW || slot>=Profiles.XBOX)?Profiles.slotLabel(language,slot):t("슬롯 %d의 저장값",slot+1));
     }
     private boolean save() {
         if(!dirty) return true;
@@ -349,7 +405,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         savedProfile=profile.encode();
         dirty=false;
         updateSaveState();
-        Toast.makeText(this,t("슬롯 %d에 저장했습니다",slot+1),Toast.LENGTH_SHORT).show();
+        Toast.makeText(this,(slot==Profiles.RAW || slot>=Profiles.XBOX)?Profiles.slotLabel(language,slot)+" · "+t("저장"):t("슬롯 %d에 저장했습니다",slot+1),Toast.LENGTH_SHORT).show();
         return true;
     }
     private void discardDraft() {
@@ -448,14 +504,14 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         boolean headerS=device==null?modeS:isS(device);
         int active=store.active(headerS);
         modeLabel.setText(modeName(headerS));
-        String activeName=active==Profiles.RAW?"RAW":t("활성 슬롯 %d",active+1);
+        String activeName=(active==Profiles.RAW || active>=Profiles.XBOX)?Profiles.slotLabel(language,active):t("활성 슬롯 %d",active+1);
         activeSlotButton.setText(activeName+"  ▾");
         activeSlotButton.setContentDescription(activeName);
-        boolean otherSlot=modeS!=headerS || slot!=active;
+        boolean otherSlot=adjustment && (modeS!=headerS || slot!=active);
         editSlotLabel.setVisibility(otherSlot?View.VISIBLE:View.GONE);
-        if(otherSlot)editSlotLabel.setText((modeS!=headerS?(modeS?"S · ":"D · "):"")+(slot==Profiles.RAW?"RAW":t(store.active(modeS)==Profiles.RAW?"슬롯 %d":"편집 슬롯 %d 미리보기",slot+1)));
+        if(otherSlot)editSlotLabel.setText((modeS!=headerS?(modeS?"S · ":"D · "):"")+((slot==Profiles.RAW || slot>=Profiles.XBOX)?Profiles.slotLabel(language,slot):t(store.active(modeS)==Profiles.RAW?"슬롯 %d":"편집 슬롯 %d 미리보기",slot+1)));
         if(device==null) status.setText(t("연결 대기 · 프로필을 미리 편집할 수 있습니다"));
-        else status.setText(device.getName()+(isS(device)==modeS?"":"  ·  "+t("다른 모드 미리보기"))
+        else status.setText(device.getName()+(!adjustment || isS(device)==modeS?"":"  ·  "+t("다른 모드 미리보기"))
             +(active!=Profiles.RAW && modeS && isS(device)?"  ·  "+t(pointerBridge!=null && pointerBridge.connected?"Lite 2 커서 보정 연결":"연결 안 됨"):""));
     }
     private void chooseActiveSlot() {
@@ -463,13 +519,17 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         chooseActiveSlot(device==null?modeS:isS(device));
     }
     private void chooseActiveSlot(boolean selectedMode) {
-        String[] slots=new String[Profiles.SLOT_COUNT+1];
-        slots[0]="RAW";
-        for(int i=1;i<slots.length;i++)slots[i]=t("슬롯 %d",i);
+        int[] ids=Profiles.slots(selectedMode);
+        String[] slots=new String[ids.length];
+        int current=0;
+        for(int i=0;i<ids.length;i++){
+            slots[i]=Profiles.slotLabel(language,ids[i]);
+            if(ids[i]==store.active(selectedMode))current=i;
+        }
         new AlertDialog.Builder(this).setTitle(modeName(selectedMode))
-            .setSingleChoiceItems(slots,store.active(selectedMode)+1,(dialog,index)->{
+            .setSingleChoiceItems(slots,current,(dialog,index)->{
                 dialog.dismiss();
-                setSlot(selectedMode,index-1);
+                setSlot(selectedMode,ids[index]);
             }).setNegativeButton(t("닫기"),null).show();
     }
     private void chooseEditMode() {
@@ -483,11 +543,12 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(!adjustment)drawScreen();
     }
     private void drawScreen() {
+        gyroSpeedSlider=null;gyroSpeedLabel=null;stickSpeedLabel=null;wheelSpeedLabel=null;wheelSpeedSlider=null;
         cancelMonitorHold();
         rememberScroll();
         renderedS=modeS; renderedAdjust=adjustment;
         draftStatus=null; restoreButton=null;
-        gyroPreview=null;monitorPad=null;monitorValues=lastInput=null;
+        gyroPreview=null;zeroHeadingButton=null;monitorPad=null;monitorValues=lastInput=null;
         leftGraph=rightGraph=null;
         root=column(); root.setBackgroundColor(BG);
         if(android.os.Build.VERSION.SDK_INT>=30) root.setOnApplyWindowInsetsListener((view,insets)->{
@@ -526,7 +587,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         headerActions.setGravity(android.view.Gravity.END|android.view.Gravity.CENTER_VERTICAL);
         titleRow.addView(headerActions,new LinearLayout.LayoutParams(0,-2,1));
         saveButton=button("저장",true,this::save);
-        if(slot==Profiles.RAW)saveButton.setVisibility(View.GONE);
+
         saveButton.setContentDescription(t("현재 슬롯 저장"));
         Button globe=button("◎",false,this::chooseLanguage);
         globe.setText("🌐");globe.setTextSize(19);
@@ -576,7 +637,9 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     }
 
     private void makeMonitor() {
-        boolean raw=store.active(modeS)==Profiles.RAW;
+        InputDevice live=connected();
+        monitorS=live==null?modeS:isS(live);
+        boolean raw=store.active(monitorS)==Profiles.RAW;
         boolean landscape=getResources().getConfiguration().orientation==
             android.content.res.Configuration.ORIENTATION_LANDSCAPE;
         LinearLayout panel=landscape?row():column();
@@ -587,25 +650,30 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         diagram.setGravity(android.view.Gravity.CENTER);
         panel.addView(diagram,landscape?new LinearLayout.LayoutParams(0,-1,1.25f):
             new LinearLayout.LayoutParams(-1,0,1));
-        monitorPad=new AssignmentPad(this,null);
+        monitorPad=new AssignmentPad(this,null,monitorS?Profiles.RAW:store.active(false));
         diagram.addView(monitorPad,new LinearLayout.LayoutParams(-1,-2));
         drawPad();
 
         LinearLayout info=column();
-        boolean graphs=!modeS && !raw;
+        boolean graphs=!monitorS && !raw;
         info.setGravity(android.view.Gravity.CENTER_VERTICAL);
         panel.addView(info,landscape?new LinearLayout.LayoutParams(0,-1,1):
             new LinearLayout.LayoutParams(-1,graphs?0:-2,graphs?.8f:0));
-        info.addView(text(modeS?"에어마우스 모니터":"게임패드 모니터",20,WHITE,true));
+        info.addView(text(monitorS?"에어마우스 모니터":"게임패드 모니터",20,WHITE,true));
         info.addView(text("＋와 −를 함께 3초 누르면 설정이 열립니다.",14,MUTED,false));
         info.addView(text("LB와 RB를 함께 3초 누르면 앱 화면이 닫힙니다.",14,MUTED,false));
-        if(raw)info.addView(text("패드의 기본 입력을 그대로 사용합니다.",13,MUTED,false));
+
         monitorValues=text("",17,WHITE,false); info.addView(monitorValues);
         lastInput=text("",15,GOLD,false); info.addView(lastInput);
-        if(modeS) {
+        if(monitorS) {
             LinearLayout gyro=row();
             gyro.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            gyro.addView(text("자이로",14,MUTED,true));
+            LinearLayout heading=column();
+            heading.addView(text("자이로",14,MUTED,true));
+            zeroHeadingButton=button("정면 맞추기",false,()->gyroPreview.zeroHeading());
+            zeroHeadingButton.setEnabled(false);
+            heading.addView(zeroHeadingButton);
+            gyro.addView(heading);
             gyroPreview=new GyroPreview(this);
             gyroPreview.setContentDescription(t("자이로"));
             gyro.addView(gyroPreview,new LinearLayout.LayoutParams(dp(156),dp(88)));
@@ -614,8 +682,9 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         if(graphs) {
             LinearLayout plots=row();
             info.addView(plots,new LinearLayout.LayoutParams(-1,0,1));
-            leftGraph=monitorCurve(plots,profile.left,"왼쪽 스틱");
-            rightGraph=monitorCurve(plots,profile.right,"오른쪽 스틱");
+            Profiles.Profile displayed=store.navigation(false);
+            leftGraph=monitorCurve(plots,displayed.left,"왼쪽 스틱");
+            rightGraph=monitorCurve(plots,displayed.right,"오른쪽 스틱");
         }
         updateMonitor();
     }
@@ -631,7 +700,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         ScrollView page=new ScrollView(this);
         page.addView(controls);
         calibrationMenu=new AlertDialog.Builder(this)
-            .setTitle(t("스틱 보정")+" · "+t("슬롯 %d",slot+1)).setView(page)
+            .setTitle(t("스틱 보정")+" · "+Profiles.slotLabel(language,slot)).setView(page)
             .setPositiveButton(t("닫기"),null).create();
         calibrationMenu.setOnDismissListener(d->{calibrationMenu=null;});
         calibrationMenu.show();
@@ -700,6 +769,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     }
     private void receiveAxes(int x,int y,int rightX,int rightY) {
         if(stickCapture!=null)stickCapture.sample(captureLeft?x:rightX,captureLeft?y:rightY,android.os.SystemClock.elapsedRealtime());
+        if(!adjustment){lx=x/127f;ly=y/127f;rx=rightX/127f;ry=rightY/127f;drawPad();updateMonitor();return;}
         lx=profile==null?x/127f:profile.left.calibration.normalized(0,x);
         ly=profile==null?y/127f:profile.left.calibration.normalized(1,y);
         rx=profile==null?rightX/127f:profile.right.calibration.normalized(0,rightX);
@@ -718,27 +788,28 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     }
 
     private void makeAdjust() {
-        LinearLayout profiles=card(body,"저장 슬롯",store.active(modeS)==Profiles.RAW?
-            "패드의 기본 입력을 그대로 사용합니다.":"모드별 슬롯 3개 · 우상단 저장 버튼으로 변경값을 기록합니다.");
+        LinearLayout profiles=card(body,"저장 슬롯",slot==Profiles.RAW || !modeS?null:"모드별 슬롯 3개 · 우상단 저장 버튼으로 변경값을 기록합니다.");
         item(profiles,button(t("편집 프로필 · %s",modeName(modeS)),false,this::chooseEditMode));
         LinearLayout slots=row();
-        for(int i=0;i<Profiles.SLOT_COUNT;i++){
-            int index=i;
-            split(slots,button(t("슬롯 %d",i+1),slot==i,()->chooseSlotToEdit(index)));
+        int count=0;
+        for(int index:Profiles.slots(modeS)){
+            if(!modeS && count==3){item(profiles,slots);slots=row();}
+            split(slots,button(Profiles.slotLabel(language,index),slot==index,()->chooseSlotToEdit(index)));
+            count++;
         }
         item(profiles,slots);
         if(!android.provider.Settings.canDrawOverlays(this))
             item(profiles,button("다른 앱 위에 슬롯 표시",false,()->startActivity(new android.content.Intent(
                 android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                 android.net.Uri.parse("package:"+getPackageName())))));
+        item(profiles,button("앱 업데이트",false,()->startActivity(new android.content.Intent(this,AppUpdate.class).putExtra("language",language))));
         item(profiles,button("태블릿에서 입력 도우미 연결",false,tabletInput::show));
-        if(slot==Profiles.RAW)return;
         if(slot!=store.active(modeS))
             item(profiles,button("이 슬롯 사용",false,()->setSlot(slot)));
         draftStatus=text("",13,MINT,false); item(profiles,draftStatus);
         LinearLayout resets=row();
         split(resets,button("기본값",false,()->{
-            profile=new Profiles.Profile(modeS);
+            profile=Profiles.defaults(modeS,slot);
             edited();
             drawScreen();
         }));
@@ -748,13 +819,14 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         });
         split(resets,restoreButton);
         item(profiles,resets);
-        if(!modeS)item(profiles,text("D 프로필 미리보기 · 설정이 게임패드 입력에 직접 적용되지 않습니다.",13,GOLD,false));
+        if(slot==Profiles.RAW){makeButtonAssignments();return;}
         item(profiles,button("스틱 보정",false,this::showCalibration));
         makeButtonAssignments();
         makeStickGraphs(body,true);
         if(modeS) {
             LinearLayout imu=card(body,"자이로",null);
-            slider(imu,"최대 감도",profile.gyroMax,0,Profiles.MAX_GYRO_PERCENT,"%",n->{profile.gyroMax=n;edited();},100);
+            gyroSpeedSlider=slider(imu,"최대 감도",(int)Math.round(profile.gyroMax),0,Profiles.MAX_SPEED_PERCENT,"%",n->{profile.gyroMax=n;edited();},100);
+            gyroBalanceSlider(imu);
             android.widget.Switch hold=new android.widget.Switch(this);
             hold.setText(t("클릭 시 자이로 고정 (0.2초)"));hold.setTextColor(WHITE);
             hold.setChecked(profile.clickHold);
@@ -763,11 +835,43 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             slider(imu,"자동 모드 스틱 유지",profile.holdMs/100,0,50," × 0.1초",n->{profile.holdMs=n*100;edited();});
         }
     }
+    private void gyroBalanceSlider(LinearLayout card) {
+        item(card,text(t("자이로 축 비율"),14,MUTED,false));
+        LinearLayout readouts=row();
+        TextView horizontal=text("",14,WHITE,false);
+        TextView vertical=text("",14,WHITE,false);
+        vertical.setGravity(android.view.Gravity.END);
+        split(readouts,horizontal);
+        split(readouts,vertical);
+        item(card,readouts);
+        SeekBar slider=new SeekBar(this);
+        slider.setMax(200);
+        slider.setProgress(profile.gyroBalance+100);
+        slider.setContentDescription(t("자이로 축 비율"));
+        item(card,slider);
+        Runnable refresh=()->{
+            horizontal.setText(t("수평")+" "+profile.horizontalGyroPercent()+"%");
+            vertical.setText(t("수직")+" "+profile.verticalGyroPercent()+"%");
+        };
+        refresh.run();
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onStartTrackingTouch(SeekBar bar) {}
+            public void onStopTrackingTouch(SeekBar bar) {}
+            public void onProgressChanged(SeekBar bar,int position,boolean fromUser) {
+                if(!fromUser)return;
+                profile.gyroBalance=position-100;
+                refresh.run();
+                edited();
+            }
+        });
+    }
     private void makeButtonAssignments() {
+        boolean fixed=Profiles.fixedLayout(modeS,slot);
         LinearLayout map=card(body,"버튼 할당",null);
         TextView detail=text("",15,MUTED,false);
         item(map,detail);
-        AssignmentOverview pad=new AssignmentOverview(this,(current,index)->{
+        AssignmentOverview pad=new AssignmentOverview(this,modeS?Profiles.RAW:slot,(current,index)->{
+            if(fixed && index!=Profiles.STAR)return;
             selectedPadButton=index;
             refreshAssignment(current,detail);
             pickAction(index,()->refreshAssignment(current,detail));
@@ -775,28 +879,44 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         map.addView(pad,new LinearLayout.LayoutParams(-1,-2));
         refreshAssignment(pad,detail);
     }
+    private String assignmentName(int index,int action) {
+        if(action==0 && (slot==Profiles.RAW || !modeS)) {
+            int nativeId=modeS?Profiles.FIRMWARE_ACTIONS[index]:20+index;
+            InputDevice physical=connected();
+            if(!modeS && index<4 && physical!=null && physical.getName().startsWith("Lite2 ")){
+                nativeId=20+(index^1);
+            }
+            if(nativeId!=0)return t(Profiles.ACTIONS[nativeId]);
+        }
+        return t(Profiles.ACTIONS[action]);
+    }
     private void refreshAssignment(AssignmentOverview pad,TextView detail) {
         for(int i=0;i<Profiles.BUTTONS.length;i++) {
-            pad.show(i,t(Profiles.BUTTONS[i]),t(Profiles.ACTIONS[profile.map[i]]),
+            pad.show(i,t(Profiles.BUTTONS[Profiles.faceIndex(modeS?Profiles.RAW:slot,i)]),assignmentName(i,profile.map[i]),
                 profile.map[i]==1,i==selectedPadButton);
         }
         pad.select(selectedPadButton);
         detail.setTextColor(selectedPadButton<0?MUTED:GOLD);
-        detail.setText(selectedPadButton<0?t("패드에서 설정할 버튼을 누르세요."):
-            t(Profiles.BUTTONS[selectedPadButton])+"   →   "+t(Profiles.ACTIONS[profile.map[selectedPadButton]]));
+        detail.setText(selectedPadButton<0?t(Profiles.fixedLayout(modeS,slot)?"★ 버튼을 눌러 동작을 바꾸세요.":"패드에서 설정할 버튼을 누르세요."):
+            t(Profiles.BUTTONS[selectedPadButton])+"   →   "+assignmentName(selectedPadButton,profile.map[selectedPadButton]));
     }
     private void pickAction(int index,Runnable refresh) {
         int[] ids=Profiles.assignableActions(modeS);
+        if(!modeS && index!=Profiles.STAR)ids=java.util.Arrays.stream(ids).filter(Profiles::gamepadBinding).toArray();
+        if(!modeS && index==Profiles.STAR)ids=java.util.Arrays.stream(ids).filter(id->id!=14).toArray();
+        if(modeS && slot==Profiles.RAW)ids=java.util.Arrays.stream(ids).filter(id->id!=14 && id<Profiles.SPEED_DOWN).toArray();
+        final int[] choicesByIndex=ids;
         String[] choices=new String[ids.length];
         int checked=-1;
         for(int i=0;i<ids.length;i++) {
             choices[i]=t(Profiles.ACTIONS[ids[i]]);
+            if(slot==Profiles.RAW && ids[i]==0)choices[i]+=" · "+assignmentName(index,0);
             if(ids[i]==profile.map[index])checked=i;
         }
         new AlertDialog.Builder(this)
             .setTitle(t("%s 동작",t(Profiles.BUTTONS[index])))
             .setSingleChoiceItems(choices,checked,(d,i)->{
-                profile.map[index]=ids[i];edited();
+                profile.map[index]=choicesByIndex[i];edited();
                 refresh.run();
                 d.dismiss();
             }).setNegativeButton(t("닫기"),null).show();
@@ -805,8 +925,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
     private void slider(LinearLayout l,String label,int value,int min,int max,String suffix,Changed changed) {
         slider(l,label,value,min,max,suffix,changed,null);
     }
-    private void slider(LinearLayout l,String label,int value,int min,int max,String suffix,Changed changed,Integer defaultValue) {
+    private SeekBar slider(LinearLayout l,String label,int value,int min,int max,String suffix,Changed changed,Integer defaultValue) {
         TextView text=text(t(label)+"  "+value+t(suffix),14,MUTED,false);
+        if(label.equals("최대 감도")){gyroSpeedLabel=text;text.setText(t(label)+"  "+Profiles.speedText(profile.gyroMax)+"%");}
+        if(label.equals("휠 속도")){wheelSpeedLabel=text;text.setText(t(label)+"  "+Profiles.speedText(profile.wheelSpeed)+"%");}
         l.addView(text);
         SeekBar seek=new SeekBar(this); seek.setMax(max-min); seek.setProgress(value-min);
         seek.setContentDescription(t(label));
@@ -814,7 +936,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         else {
             LinearLayout controls=row(); controls.setGravity(android.view.Gravity.CENTER_VERTICAL);
             controls.addView(seek,new LinearLayout.LayoutParams(0,dp(48),1));
-            Button defaults=button(t("기본값")+" "+defaultValue+"%",false,()->seek.setProgress(defaultValue-min));
+            Button defaults=button(t("기본값")+" "+defaultValue+"%",false,()->{seek.setProgress(defaultValue-min);text.setText(t(label)+"  "+defaultValue+t(suffix));changed.set(defaultValue);});
             defaults.setContentDescription(t(label)+" · "+t("기본값")+" "+defaultValue+"%");
             controls.addView(defaults);
             item(l,controls);
@@ -824,9 +946,10 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
             public void onStopTrackingTouch(SeekBar s){}
             public void onProgressChanged(SeekBar s,int p,boolean user) {
                 text.setText(t(label)+"  "+(p+min)+t(suffix));
-                changed.set(p+min);
+                if(user)changed.set(p+min);
             }
         });
+        return seek;
     }
     private void makeStickGraphs(LinearLayout content,boolean adjust) {
         boolean wide=getResources().getConfiguration().screenWidthDp>=660;
@@ -844,6 +967,12 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
         Profiles.Stick stick=left?profile.left:profile.right;
         String title=left?"왼쪽 스틱":modeS?"오른쪽 스틱 · 휠":"오른쪽 스틱";
         LinearLayout c=card(container,title,"가로축은 기울기, 세로축은 적용할 반응입니다.");
+        if(left && modeS && adjust) {
+            stickSpeedLabel=text(t("스틱 속도")+"  "+Profiles.speedText(profile.stickSpeed)+"%",14,MUTED,false);
+            item(c,stickSpeedLabel);
+        } else if(!left && modeS && adjust) {
+            wheelSpeedSlider=slider(c,"휠 속도",(int)Math.round(profile.wheelSpeed),5,300,"%",n->{profile.wheelSpeed=n;edited();},100);
+        }
         CurveView plot=curveEditor(c,stick,title,adjust);
         if(left)leftGraph=plot;else rightGraph=plot;
     }
@@ -884,7 +1013,7 @@ public final class ControlActivity extends Activity implements InputManager.Inpu
 
     private void updateMonitor() {
         if(monitorValues!=null) {
-            if(modeS) {
+            if(monitorS) {
                 boolean captured=pointerBridge!=null && pointerBridge.route==PointerBridge.MONITOR && pointerBridge.connected;
                 monitorValues.setText(t(captured?"모니터 입력 수신":connected()==null?"입력 대기 중":"모니터 연결 대기 · 커서가 움직일 수 있습니다"));
             }

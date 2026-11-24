@@ -4,8 +4,8 @@ This developer-session path runs on the tablet under the ADB shell identity.
 The foreground monitor exclusively captures the Lite 2 S-mode mouse and
 keyboard, or the D-mode gamepad, and sends their state to the monitor UI.
 Outside the monitor, S-mode profiles forward motion through a virtual mouse.
-RAW observes slot-navigation buttons while Android handles the physical mouse
-directly. Other input devices remain available while monitoring.
+RAW observes slot-navigation buttons while Android handles native motion
+directly. In D mode, the bridge applies the selected gamepad bindings and both stick curves to a virtual gamepad. Other input devices remain available while monitoring.
 
 The app reconnects over loopback with a private session token. The helper
 acknowledges each profile update after installing its axis gains and response
@@ -28,8 +28,7 @@ registration still exposes only REL_X/Y/WHEEL, renew the pairing.
 r14 adds two relative fields (Z and Dial) to the S-mode mouse report. Each
 carries one nine-bit half of the physical button state plus one, so releases
 survive the HID transport. The companion receives state changes on its private
-connection. The first snapshot establishes a baseline. Slot actions run on
-press edges; the default LT and RT bindings cycle backward and forward.
+connection. The first snapshot establishes a baseline. Slot navigation takes effect on release. S defaults to −/+ for previous/next, and D defaults to ★ for cycling profiles.
 
 Build on Windows with Zig 0.14.1:
 

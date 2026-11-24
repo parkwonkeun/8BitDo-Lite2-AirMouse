@@ -24,15 +24,33 @@ class Machine:
         self.u.mem_map(0x20000, 0x10000)
         with (ROOT / 'build/mouse.elf').open('rb') as f:
             elf = ELFFile(f)
-            for section in ('.gravity', '.text'):
+            for section in ('.gravity', '.settings', '.text'):
                 part=elf.get_section_by_name(section)
                 self.u.mem_write(part['sh_addr'],part.data())
             self.symbols = {s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+        self.nv = bytearray(b'\xff'*4096)
+        def nv_io(uc, address, size, data):
+            off=uc.reg_read(UC_ARM_REG_R0)-0x107d000
+            buf=uc.reg_read(UC_ARM_REG_R1)
+            n=uc.reg_read(UC_ARM_REG_R2)
+            if address==0x101c6ae:
+                assert off==0 and buf==4096
+                self.nv[:]=b'\xff'*4096
+            else:
+                if address==0x101c6d2: n*=4
+                assert 0<=off and off+n<=4096
+                if address==0x10276a0: uc.mem_write(buf,bytes(self.nv[off:off+n]))
+                else:
+                    for i,v in enumerate(uc.mem_read(buf,n)): self.nv[off+i]&=v
+            uc.reg_write(UC_ARM_REG_R0,1)
+            uc.reg_write(UC_ARM_REG_PC,uc.reg_read(UC_ARM_REG_LR))
+        for addr in (0x10276a0,0x1027704,0x101c6ae,0x101c6d2):
+            self.u.hook_add(UC_HOOK_CODE,nv_io,begin=addr,end=addr)
         self.u.hook_add(UC_HOOK_CODE, self.stop, begin=STOP, end=STOP)
-        self.u.mem_write(STATE-16, b'\xa5'*(16+76+16))
+        self.u.mem_write(STATE-16, b'\xa5'*(16+96+16))
         self.call('mouse_reset', STATE)
         assert self.u.mem_read(STATE-16,16) == b'\xa5'*16
-        assert self.u.mem_read(STATE+76,16) == b'\xa5'*16
+        assert self.u.mem_read(STATE+96,16) == b'\xa5'*16
 
     def stop(self, uc, address, size, data): uc.emu_stop()
 
@@ -57,7 +75,7 @@ class Machine:
         self.call('mouse_step',STATE,IMU,buttons,dt,OUTPUT,axes if axes>0xffff else axes|0x80800000)
         assert self.u.mem_read(OUTPUT-16,16)==b'\xa5'*16
         assert self.u.mem_read(OUTPUT+9,16)==b'\xa5'*16
-        assert self.u.mem_read(STATE+76,16)==b'\xa5'*16
+        assert self.u.mem_read(STATE+96,16)==b'\xa5'*16
         return struct.unpack('<Bhhb3s', self.u.mem_read(OUTPUT,9))
 
     def calibrate(self, sample=(0,0,4096,0,0,0)):
@@ -139,7 +157,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(sum(r[1] for r in results),18000*sign)
             self.assertEqual(sum(r[2] for r in results),0)
             results=[self.m.step((0,0,4096,0,1024*sign,0)) for _ in range(100)]
-            self.assertEqual(sum(r[2] for r in results),4000*sign)
+            self.assertEqual(sum(r[2] for r in results),9000*sign)
 
     def test_fine_rotation_in_rest_recording(self):
         log=json.loads((ROOT/'tests/data/stationary-scan.json').read_text())
@@ -251,9 +269,9 @@ class CoreTests(unittest.TestCase):
     def test_right_stick_scrolls_by_tilt(self):
         slow = [self.m.step(axes=0x60808080)[3] for _ in range(100)]
         fast = [self.m.step(axes=0x01808080)[3] for _ in range(100)]
-        self.assertEqual(slow[0],1)
+        self.assertEqual(slow[0],0)
         self.assertGreater(sum(fast),sum(slow))
-        self.assertEqual(self.m.step(axes=0xff808080)[3],-1)
+        self.assertEqual(sum(self.m.step(axes=0xff808080)[3] for _ in range(100)),-14)
         self.assertEqual(self.m.step(axes=0x80ff8080)[3],0)
         self.assertEqual(self.m.step(buttons=0xc000)[3],0)
 
@@ -262,8 +280,8 @@ class CoreTests(unittest.TestCase):
             self.m.step(axes=axes,dt=5)
             reports=[self.m.step(axes=axes,dt=5) for _ in range(200)]
             fine=[struct.unpack('b',r[4][:1])[0]*sign for r in reports]
-            self.assertEqual(set(fine),{4,5})
-            self.assertEqual(sum(fine),900)
+            self.assertEqual(set(fine),{0,120})
+            self.assertEqual(sum(fine),1800)
             self.assertEqual(sum(r[3] for r in reports),15*sign)
             for _ in range(10):
                 r=self.m.step(dt=5)
@@ -280,7 +298,7 @@ class CoreTests(unittest.TestCase):
                 self.assertEqual(self.m.step(gyro)[1:3],(0,0))
             self.assertEqual(self.m.step(gyro)[1:3],(0,0))
             takeover=self.m.step(gyro)
-            self.assertEqual(takeover[1:3],(180,0) if gyro[5] else (0,80))
+            self.assertEqual(takeover[1:3],(180,0) if gyro[5] else (0,180))
             self.assertGreater(self.m.step(axes=0x80c0)[1],0)
 
     def test_l3_cycles_modes_and_debounces(self):
@@ -313,7 +331,7 @@ class CoreTests(unittest.TestCase):
     def test_extreme_input_and_gap(self):
         self.m.calibrate()
         self.assertEqual(self.m.step((0,0,4096,0,0,-32768),dt=100)[1:3],(28800,0))
-        self.assertEqual(self.m.step((0,0,4096,0,-32768,0),dt=100)[2],-12800)
+        self.assertEqual(self.m.step((0,0,4096,0,-32768,0),dt=100)[2],-28800)
         self.assertEqual(self.m.step((0,0,4096,-32768,0,-32768),dt=101)[1:3],(0,0))
         self.assertEqual(self.m.step(dt=0)[1:3],(0,0))
 

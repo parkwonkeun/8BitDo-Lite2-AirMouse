@@ -20,29 +20,36 @@ DAT_SHA='121c1df789577997572373d049bfa245eb1fdae231223b0bb37463b257d3e27f'
 MOUSE=bytes.fromhex('''
 05 01 09 02 a1 01 85 01
 09 01 a1 00 05 09 19 01 29 03 25 01
-75 01 95 03 81 02 75 05 95 01 81 03
+75 01 95 03 81 02 81 03 05 0c 09 ea 09 e9 95 02 81 02
 05 01 09 30 09 31 16 01 80 26 ff 7f 75 10 95 02 81 06
 09 38 15 81 25 7f 75 08 95 01 81 06
 09 33 09 34 09 35 09 32 09 37 16 00 80 26 ff 7f 75 10 95 05 81 06 c0 c0''')
 # Report 1 retains its legacy prefix for hosts with a cached descriptor.
 # New Bluetooth hosts use the fine wheel byte appended after the telemetry.
-BT_WHEEL_DIVISOR=60
+BT_WHEEL_DIVISOR=120
 _wheel=bytes.fromhex('09 38 15 81 25 7f 75 08 95 01 81 06')
 BT_MOUSE=(MOUSE.replace(_wheel,bytes.fromhex('75 08 95 01 81 03'))[:-2]+
     bytes.fromhex('09 38 a1 02 a4 85 06 09 48 15 00 25 01 35')+
     bytes([BT_WHEEL_DIVISOR,0x45,BT_WHEEL_DIVISOR])+
     bytes.fromhex('75 08 95 01 b1 02 b4')+_wheel+bytes.fromhex('c0 c0 c0'))
 # Standard 8-byte keyboard input and a separate Consumer Control collection.
+# The first two keyboard bytes are always zero. The LED output bits
+# let the tablet reserve trigger presses for the slot or monitor session.
 KEYBOARD=bytes.fromhex(
-    '05 01 09 06 a1 01 85 04 05 07 15 00 25 01 19 e0 29 e7 '
-    '75 01 95 08 81 02 75 08 95 01 81 03 '
-    '15 00 25 65 19 00 29 65 95 06 81 00 c0')
+    '05 01 09 06 a1 01 85 04 75 08 95 02 81 03 05 07 15 00 25 65 '
+    '19 00 29 65 95 06 81 00 05 08 19 01 29 05 25 01 75 01 95 05 91 02 95 03 91 03 c0')
+# Immediately follows the keyboard collection on both transports; range 0..1, size 1,
+# are already set by its LED output field.
 CONSUMER=bytes.fromhex(
-    '05 0c 09 01 a1 01 85 05 15 00 25 01 75 01 95 02 '
-    '0a 24 02 0a 23 02 81 02 95 06 81 03 c0')
+    '05 0c 09 01 a1 01 85 05 95 02 0a 24 02 0a 23 02 81 02 95 06 81 03 c0')
 USB_VENDOR=bytes.fromhex(
     '06 00 ff 09 01 a1 01 15 00 26 ff 00 75 08 95 3f '
     '85 02 09 02 81 03 85 81 09 03 91 83 c0')
+
+USB_FINE_WHEEL = (bytes.fromhex('09 38 a1 02 a4 85 06 09 48 15 00 25 01 35 78 45 78')
+                  + bytes.fromhex('75 08 95 01 b1 02 b4') + _wheel + bytes.fromhex('c0'))
+USB_FINE_DESCRIPTOR = (MOUSE.replace(_wheel, USB_FINE_WHEEL) + KEYBOARD + CONSUMER +
+                       USB_VENDOR[:-1] + bytes.fromhex('85 03 09 04 81 03 c0'))
 
 def sha(data): return hashlib.sha256(data).hexdigest()
 
@@ -51,15 +58,17 @@ def thumb_bl(source,target):
     if delta&1 or not -(1<<22)<=delta<(1<<22): raise ValueError('BL outside Thumb-1 range')
     return struct.pack('<HH',0xf000|((delta>>12)&0x7ff),0xf800|((delta>>1)&0x7ff))
 
-def main():
+def main(ble_base=False):
     original=(ROOT/'outputs/Lite2-v1.06-decrypted-analysis-only.bin').read_bytes()
     official=(ROOT/'outputs/Lite2-v1.06-official.dat').read_bytes()
     if sha(original)!=PLAIN_SHA or sha(official)!=DAT_SHA: raise ValueError('Unexpected base image')
-    if len(MOUSE)!=86: raise ValueError(f'HID descriptor length {len(MOUSE)}')
+    if len(MOUSE)!=92: raise ValueError(f'HID descriptor length {len(MOUSE)}')
     with (ROOT/'build/mouse.elf').open('rb') as f:
         elf=ELFFile(f)
         symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
         fusion=elf.get_section_by_name('.gravity')
+        settings=elf.get_section_by_name('.settings')
+        settings_start,settings_bytes=settings['sh_addr'],settings.data()
         fusion_start,fusion_bytes=fusion['sh_addr'],fusion.data()
     addon=(ROOT/'build/mouse.bin').read_bytes()
     image=bytearray(original);changes=[]
@@ -69,6 +78,8 @@ def main():
         image[off:off+len(old)]=new
         changes.append(dict(address=f'0x{address:08x}',before=old.hex(),after=new.hex(),reason=reason))
 
+    replace(0x010211ac,struct.pack('<I',0x010210e1),struct.pack('<I',symbols['lite2_pairing_lights']|1),
+            'Blink all four player LEDs together during button-initiated wireless pairing')
     replace(0x0101820c,struct.pack('<I',0x010271e5),struct.pack('<I',symbols['lite2_start']|1),'Initialize private mouse state before stock main')
     replace(0x01018214,struct.pack('<I',0x2ff00),struct.pack('<I',0x2fe00),'Reserve 256 bytes above new initial stack; ROM ownership not yet hardware verified')
     replace(0x0101cfe8,bytes.fromhex('06 f0 b6 fc'),thumb_bl(0x0101cfe8,symbols['lite2_scan']),'S mode periodic report gate, preserving original scan helper')
@@ -87,7 +98,7 @@ def main():
             'Sample S wireless movement under low radio capacity while deferring transmission')
     for address in (0x0101d02a,0x0101d034):
         replace(address,thumb_bl(address,0x0102644c),thumb_bl(address,symbols['lite2_scan_delay']),
-                'Shorten the active S wireless stick scan interval')
+                'Use the shortest native scan interval throughout the S Bluetooth connection')
     replace(0x0101e198,thumb_bl(0x0101e198,0x01020d38),thumb_bl(0x0101e198,symbols['lite2_dispatch']),'Dispatch S as mouse; call unchanged original report function for D and other modes')
     replace(0x0101dfd4,thumb_bl(0x0101dfd4,0x010277fc),thumb_bl(0x0101dfd4,symbols['lite2_switch_commands']),'S mouse does not wait for Nintendo host handshakes')
     replace(0x0101ae76,thumb_bl(0x0101ae76,0x0101a9c0),
@@ -95,14 +106,20 @@ def main():
             'Advertise both keyboard and pointing capabilities in S Bluetooth mode')
     replace(0x01021ec2,thumb_bl(0x01021ec2,0x0101a6fc),thumb_bl(0x01021ec2,symbols['lite2_set_sdp']),'S-only SDP call uses appended Classic mouse service record')
     replace(0x01021ed0,bytes.fromhex('60 e0'),bytes.fromhex('44 e0'),
-            'Keep the r28 S role-switch feature and disable local Sniff')
+            'Use the r48 S link features and disable local Sniff after successful service registration')
+    replace(0x0101a17c,thumb_bl(0x0101a17c,0x010269d4),thumb_bl(0x0101a17c,symbols['lite2_hid_connected']),
+            'Reset connection-local S diagnostics on a new Classic HID link and run the original report initializer')
     replace(0x01021fbc,struct.pack('<I',0x0102abc9),struct.pack('<I',symbols['lite2_mouse_name']),'S Bluetooth name Lite2 Air Mouse Plus; D name unchanged')
     replace(0x01022428,bytes.fromhex('70 b5 04 46 0d 46 00 2d'),
             bytes.fromhex('00 4b 18 47')+struct.pack('<I',symbols['lite2_player_lights']|1),
             'Route all player light writes through the S-mode LED override')
+    replace(0x01026270,thumb_bl(0x01026270,0x010267a8),thumb_bl(0x01026270,symbols['lite2_usb_poll']),
+            'Service S USB pointer from foreground loop at millisecond resolution')
+    replace(0x0102a2b4,bytes.fromhex('07 05 81 03 40 00 08'),bytes.fromhex('07 05 81 03 40 00 01'),
+            'Request one full-speed USB frame per interrupt IN poll in S mode')
     usb=original[0x123ea:0x124b5]
     if len(usb)!=203 or usb[:10]!=bytes.fromhex('05 01 15 00 09 04 a1 01 85 30'):raise ValueError('Unexpected S USB descriptor')
-    vendor=USB_VENDOR[:-1]+bytes.fromhex('85 03 09 04 75 08 95 3f 81 03 c0')
+    vendor=USB_VENDOR[:-1]+bytes.fromhex('85 03 09 04 81 03 c0')
     descriptor=MOUSE+KEYBOARD+CONSUMER+vendor
     remaining=len(usb)-len(descriptor)
     if remaining<0:raise ValueError('S USB descriptor overflow')
@@ -111,25 +128,50 @@ def main():
         remaining-=3
     descriptor+=bytes.fromhex('05 01')*(remaining//2)
     replace(0x0102a3ea,usb,descriptor,'S USB mouse and diagnostic/vendor collection; D descriptor unchanged')
+    report_size=len(USB_FINE_DESCRIPTOR)
+    assert 203 < report_size < 256
+    replace(0x01024220,struct.pack('<I',0x0102a3ea),struct.pack('<I',symbols['lite2_usb_descriptor']),
+            'Serve the extended S USB report descriptor')
+    replace(0x01024104,bytes.fromhex('cb 28'),bytes([report_size,0x28]),'S USB GET_DESCRIPTOR upper length')
+    replace(0x01024108,bytes.fromhex('cb 20'),bytes([report_size,0x20]),'S USB GET_DESCRIPTOR reply length')
+    replace(0x0102a2b2,bytes.fromhex('cb 00'),struct.pack('<H',report_size),'S USB HID report descriptor length')
+    replace(0x0102a134,bytes.fromhex('00 02'),bytes.fromhex('01 02'),'Refresh Windows S USB descriptor cache')
+    replace(0x01023f60,bytes.fromhex('fe b5 06 46 0c 46 00 25'),
+            bytes.fromhex('00 4b 18 47')+struct.pack('<I',symbols['lite2_usb_setup']|1),
+            'Answer S USB wheel multiplier GET_REPORT through the control endpoint')
     if fusion_start!=0x01027844 or fusion_start+len(fusion_bytes)>0x01027c00:
         raise ValueError('Unexpected fusion placement')
     offset=fusion_start-BASE
     replace(fusion_start,original[offset:offset+len(fusion_bytes)],fusion_bytes,'S-mode gravity estimator and calibration')
+    if settings_start!=0x01027ce8 or settings_start+len(settings_bytes)>0x01028080:
+        raise ValueError('Unexpected settings placement')
+    offset=settings_start-BASE
+    replace(settings_start,original[offset:offset+len(settings_bytes)],settings_bytes,'RAW gain storage in retired Switch handler')
+    for address,stock,name in ((0x010269ae,0x0101c6ae,'lite2_config_erase'),(0x010269b8,0x0101c6d2,'lite2_config_write')):
+        replace(address,thumb_bl(address,stock),thumb_bl(address,symbols[name]),'Preserve RAW gains across native configuration commits')
+    for address in (0x0101fa94,0x01025482):
+        replace(address,thumb_bl(address,0x01022d90),thumb_bl(address,symbols['lite2_slot_output']),
+                'S-mode keyboard output controls the temporary slot session')
     image.extend(addon)
     image.extend(b'\xff'*(-len(image)%512))
     center=symbols['lite2_stick_centers']-BASE
     if image[center:center+8]!=bytes([128])*8 or image[-8:]!=bytes([255])*8:
         raise ValueError('Public firmware must contain neutral stick centers and no calibration stamp')
     image=bytes(image)
-    if len(image)>0x15000:raise ValueError('Patch exceeds backed-up application region')
+    if len(image)>0x15000 and not ble_base:
+        sector=(ROOT/"outputs/Lite2-before-r39-next-application-sector-backup.bin").read_bytes()
+        if sector!=bytes([255])*4096:raise ValueError("Expected erased extension sector")
+    if len(image)>0x16000:raise ValueError('Patch exceeds backed-up application region')
     package=cryptdo8.build_section(image,cryptdo8.CIPHERS['yichip'],106,BASE,len(image),0x5112)
     section=cryptdo8.parse_sections(package)[0]
     if cryptdo8.decrypt_section(package,section,cryptdo8.CIPHERS['yichip'])!=image:
         raise ValueError('Re-encryption roundtrip failed')
-    prefix=ROOT/'build'/'Lite2AirMouse-v106-s-mode-r33'
+    if ble_base and sha(image)!='32003d10c775a24a73b443f8558c9cff2b8075302e43c380e2b895d3f0b27efa':
+        raise ValueError(f'BLE base layout mismatch: {sha(image)}')
+    prefix=ROOT/'build'/('Lite2AirMouse-v106-s-mode-r50' if ble_base else 'Lite2AirMouse-v106-s-mode-r50_1')
     prefix.with_suffix('.bin').write_bytes(image)
     prefix.with_suffix('.dat').write_bytes(package)
-    manifest=dict(status='EXPERIMENTAL_S_MOUSE_KEYBOARD_D_STOCK',revision=33,subrevision=0,base_plain_sha256=PLAIN_SHA,
+    manifest=dict(status='EXPERIMENTAL_S_MOUSE_KEYBOARD_D_STOCK',revision=50,subrevision=0 if ble_base else 1,base_plain_sha256=PLAIN_SHA,
         base_dat_sha256=DAT_SHA,plain_sha256=sha(image),dat_sha256=sha(package),
         plain_bytes=len(image),dat_bytes=len(package),addon_bytes=len(addon),
         addon_address='0x0102be00',symbols={k:hex(v) for k,v in symbols.items() if k.startswith('lite2_')},
@@ -142,4 +184,8 @@ def main():
     prefix.with_suffix('.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     print(json.dumps({k:v for k,v in manifest.items() if k not in ('changes','symbols')},indent=2))
 
-if __name__=='__main__': main()
+if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--ble-base',action='store_true')
+    main(parser.parse_args().ble_base)

@@ -1,5 +1,6 @@
 """Build the Cortex-M0 patch only. This script never opens a device."""
 from pathlib import Path
+import argparse
 import os
 import subprocess
 
@@ -9,9 +10,9 @@ BIN = Path(os.environ.get('ARM_GCC_BIN', ROOT / 'work/toolchain/xpack-arm-none-e
 def run(tool, *args):
     subprocess.run([str(BIN / (tool + '.exe')), *args], cwd=ROOT, check=True)
 
-def main():
+def main(ble_base=False):
     (ROOT / 'build').mkdir(exist_ok=True)
-    from package_patch import BT_MOUSE, KEYBOARD, CONSUMER
+    from package_patch import BT_MOUSE, KEYBOARD, CONSUMER, USB_FINE_DESCRIPTOR
     original=(ROOT/'outputs/Lite2-v1.06-decrypted-analysis-only.bin').read_bytes()
     sdp=bytearray(original[0x12ee2:0x130ba])
     extra=KEYBOARD+CONSUMER
@@ -35,9 +36,13 @@ def main():
     del sdp[-len(device_id):]
     name=b'Bluetooth Wireless Controller   '
     old=bytes([0x25,len(name)])+name
-    name=b'Lite 2'
+    name=b'Lite2'
     assert sdp.count(old)==1
     sdp=sdp.replace(old,bytes([0x25,len(name)])+name,1)
+    # Trim the padded stock service description to fit the same RAM buffer.
+    description=bytes([0x25,8])+b'Joypad  '
+    assert sdp.count(description)==1
+    sdp=sdp.replace(description,bytes([0x25,5])+b'Mouse',1)
     sdp[14:16]=(len(sdp)-16).to_bytes(2,'big')
     assert len(sdp)+len(device_id)<=0x229
     # Reuse runs from the stock Bluetooth tables and our S USB descriptor.
@@ -45,7 +50,7 @@ def main():
     from package_patch import MOUSE
     sources=[(0xa3ea, MOUSE+KEYBOARD+CONSUMER), (0xaee2,original[0x12ee2:0x130ba])]
     # Additional immutable spans after the final code hook and outside the S USB descriptor.
-    for start,end in ((0x2440,0x7844),(0x7c00,0xa3ea),(0xa4b5,0xbe00)):
+    for start,end in ((0x2440,0x6270),(0x6274,0x7844),(0x7c00,0x7ce8),(0x8080,0xa2b4),(0xa2bb,0xa3ea),(0xa4b5,0xbe00)):
         sources.append((start,original[0x8000+start:0x8000+end]))
     record=bytes(sdp)+device_id
     best=[b'']*(len(record)+1)
@@ -61,16 +66,20 @@ def main():
         best[i]=min(options,key=len)
     (ROOT/'build/mouse_sdp.c').write_text(
         'const unsigned char lite2_sdp_recipe[] = {'+','.join(map(str,best[0]))+'};\n'
-        'const unsigned lite2_mouse_sdp_size = '+str(len(record))+';\n')
-    run('arm-none-eabi-gcc', '-mcpu=cortex-m0', '-mthumb', '-Oz', '-flto', '-fno-reorder-blocks', '-fno-code-hoisting', '-fno-move-loop-invariants', '-fno-tree-loop-optimize', '-fno-ipa-cp', '-fno-tree-fre', '-fno-tree-sink', '-fno-tree-dominator-opts', '-fno-inline-functions-called-once',
-        *['-Wl,-u,'+name for name in ('memset','mouse_reset','mouse_step','lite2_start','lite2_scan','lite2_scan_delay','lite2_dispatch','lite2_switch_commands','lite2_set_device_class','lite2_scan_pressure','lite2_set_sdp','lite2_mouse_name','lite2_player_lights')], '-std=c11',
+        'const unsigned lite2_mouse_sdp_size = '+str(len(record))+';\n'
+        'const unsigned char lite2_usb_descriptor[] = {'+','.join(map(str,USB_FINE_DESCRIPTOR))+'};\n')
+    run('arm-none-eabi-gcc', '-mcpu=cortex-m0', '-mthumb', *(['-DBLE_BASE_R50'] if ble_base else []), '-Oz', '-flto', '-fno-reorder-blocks', '-fno-code-hoisting', '-fno-move-loop-invariants', '-fno-tree-loop-optimize', '-fno-ipa-cp', '-fno-tree-fre', '-fno-tree-sink', '-fno-tree-dominator-opts', '-fno-inline-functions-called-once',
+        *['-Wl,-u,'+name for name in ('lite2_slot_output','memset','mouse_reset','mouse_step','lite2_config_erase','lite2_config_write','lite2_start','lite2_scan','lite2_scan_delay','lite2_usb_poll','lite2_dispatch','lite2_switch_commands','lite2_set_device_class','lite2_scan_pressure','lite2_set_sdp','lite2_hid_connected','lite2_mouse_name','lite2_player_lights','lite2_pairing_lights','lite2_usb_setup','lite2_usb_descriptor')], '-std=c11',
         '-Wall', '-Wextra', '-Werror', '-ffreestanding', '-fno-builtin',
         '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-nostdlib',
         '-Wl,-T,src/patch.ld', '-Wl,-Map,build/mouse.map', 'src/mouse_core.c',
         'src/gravity.c','src/lite2_v106_adapter.c', 'build/mouse_sdp.c', '-lgcc', '-o', 'build/mouse.elf')
-    run('arm-none-eabi-objcopy','-R','.gravity','-O','binary','build/mouse.elf','build/mouse.bin')
+    run('arm-none-eabi-objcopy','-R','.gravity','-R','.settings','-O','binary','build/mouse.elf','build/mouse.bin')
     run('arm-none-eabi-size', 'build/mouse.elf')
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--ble-base',action='store_true',help='Use the original r50 layout required by the BLE overlay')
+    main(parser.parse_args().ble_base)
 
 

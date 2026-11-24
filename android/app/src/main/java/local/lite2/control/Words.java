@@ -20,6 +20,12 @@ final class Words {
     }
     private static final Map<String,String[]> TEXT=new HashMap<>();
     static {
+        add("★ 버튼을 눌러 동작을 바꾸세요.","点按 ★ 可更改其功能。","★ を押して機能を変更できます。","Tap ★ to change its action.");
+        add("앱 업데이트","应用更新","アプリ更新","App update");
+        add("업데이트 확인 중…","正在检查更新…","更新を確認中…","Checking for updates…");
+        add("설치된 버전 %s · GitHub 버전 %s","已安装 %s · GitHub %s","インストール済み %s · GitHub %s","Installed %s · GitHub %s");
+        add("다운로드 중…","正在下载…","ダウンロード中…","Downloading…");
+        add("업데이트 실패","更新失败","更新に失敗しました","Update failed");
         add("스틱 보정","摇杆校准","スティック補正","Stick calibration");
         add("최소 / 영점 / 최대","最小 / 中心 / 最大","最小 / 中心 / 最大","Minimum / center / maximum");
         add("영점 측정","测量中心","中心を測定","Measure center");
@@ -80,6 +86,7 @@ final class Words {
         add("기본값","默认值","初期値","Defaults");
         add("저장 전 값","上次保存值","前回の保存値","Revert to saved");
         add("프로필 미리보기 · 현재 패드 펌웨어로 설정을 보내는 기능은 준비 중입니다.","配置预览 · 向手柄固件发送设置的功能尚未启用。","プロファイルプレビュー · パッドへの設定送信機能は準備中です。","Profile preview · sending settings to the controller is not available yet.");
+        add("정면 맞추기","重置朝向","正面を合わせる","Recenter heading");
         add("자이로","陀螺仪","ジャイロ","Gyroscope");
         add("좌우·상하 민감도와 자동 모드의 유지 시간을 별도로 설정합니다.","分别设置水平、垂直灵敏度和自动模式保持时间。","横・縦の感度と自動モードの保持時間を個別に設定します。","Set horizontal and vertical sensitivity and the auto-mode hold time.");
         add("클릭 시 자이로 고정 (0.2초)","点击时暂停陀螺仪（0.2 秒）","クリック時にジャイロを固定（0.2秒）","Steady gyro on click (0.2 s)");
@@ -158,6 +165,14 @@ final class Words {
         add("D 프로필 미리보기 · 설정이 게임패드 입력에 직접 적용되지 않습니다.","D 配置预览 · 设置不会直接更改手柄输入。","D プロファイルプレビュー · ゲームパッド入力には直接反映されません。","D profile preview · settings do not directly change gamepad input.");
         add("＋와 −를 함께 3초 누르면 설정이 열립니다.","同时按住 ＋ 和 − 3 秒，打开设置。","＋と−を同時に3秒間押すと設定が開きます。","Hold ＋ and − together for 3 seconds to open Settings.");
         add("LB와 RB를 함께 3초 누르면 앱 화면이 닫힙니다.","同时按住 LB 和 RB 3 秒，关闭应用界面。","LBとRBを同時に3秒間押すとアプリ画面が閉じます。","Hold LB and RB together for 3 seconds to close the app screen.");
+        add("슬롯 전환","循环切换配置","スロットを巡回","Cycle slots");
+        add("포인터 속도 낮추기","降低指针速度","ポインターを遅くする","Decrease pointer speed");
+        add("포인터 속도 높이기","提高指针速度","ポインターを速くする","Increase pointer speed");
+        add("자이로 축 비율","陀螺仪轴向比例","ジャイロの軸比率","Gyro axis balance");
+        add("수평","水平","水平","Horizontal");
+        add("수직","垂直","垂直","Vertical");
+        add("휠 속도","滚轮速度","スクロール速度","Scroll speed");
+        add("스틱 속도","摇杆速度","スティック速度","Stick speed");
         ExtraWords.addTo(TEXT);
     }
     private static void add(String ko,String zh,String ja,String en) {

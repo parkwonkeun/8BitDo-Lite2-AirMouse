@@ -7,6 +7,10 @@ SECTIONS {
        Keep its entry/exit and neighboring functions and tables intact. */
     .gravity 0x01027844 : { *(.gravity) }
     ASSERT(ADDR(.gravity)+SIZEOF(.gravity) <= 0x01027c00, "Switch handler span exceeded")
+    /* Second instruction span of the same retired Switch command handler.
+       Leave both original literal pools in place. */
+    .settings 0x01027ce8 : { *(.settings) }
+    ASSERT(ADDR(.settings)+SIZEOF(.settings) <= 0x01028080, "Settings code span exceeded")
     . = 0x0102be00;
     .text : { *(.text*) *(.rodata*) }
     .ARM.exidx : { *(.ARM.exidx*) }

@@ -13,9 +13,9 @@ static int test_clock(clockid_t id,struct timespec *t) {
 #undef main
 
 // Fixed physical tilt with irregular Bluetooth reports, on the tablet clock.
-static int replay_stick(unsigned period) {
+static int replay_stick(unsigned period, int speed) {
     int pipes[2];assert(pipe2(pipes,O_NONBLOCK)==0);
-    struct profile p={.gx=150,.gy=100,
+    struct profile p={.gx=150,.gy=100,.stick_percent=speed,
         .cursor_curve={.count=3,.x={0,10,100},.y={0,0,100},.slope={0,0,1.111111}}};
     struct motion m={0};
     int total=0,jumps=0;
@@ -59,8 +59,8 @@ static void replay_gyro_zero(void) {
     assert(zero.ready && elapsed>7200 && still==0 && positive>3000 && negative< -3000);
     puts("PASS: rest capture and sustained +4/-4 turns");
 }
-static int replay_wheel(unsigned report_period,int offset) {
-    struct profile p={.scroll_curve={.count=2,.x={0,100},.y={0,50},.slope={.5,.5}}};
+static int replay_wheel(unsigned report_period,int offset,int percent) {
+    struct profile p={.wheel_percent=percent,.scroll_curve={.count=2,.x={0,100},.y={0,50},.slope={.5,.5}}};
     struct motion m={0};
     int fd[2];assert(pipe2(fd,O_NONBLOCK)==0);
     int total=0,legacy=0,events=0;
@@ -74,12 +74,12 @@ static int replay_wheel(unsigned report_period,int offset) {
         struct input_event e;
         while(read(fd[0],&e,sizeof(e))==sizeof(e)) {
             if(e.type==EV_REL && e.code==REL_WHEEL_HI_RES) {
-                assert(t<=1000 && abs(e.value)<=15);total+=e.value;events++;
+                assert(t<=1000 && abs(e.value)==60);total+=e.value;events++;
             }
             if(e.type==EV_REL && e.code==REL_WHEEL)legacy+=e.value;
         }
     }
-    assert(events==125 && legacy==total/120);
+    assert(events==15*percent/100 && legacy==total/120);
     close(fd[0]);close(fd[1]);return total;
 }
 // Hold a calibrated rate over repeated radio gaps, then reverse and stop.
@@ -145,7 +145,7 @@ static void test_click_hold(void) {
                 if(e.type==EV_REL && e.code==REL_Y)y+=e.value;
             }
             int held=enabled && (sample==0 || (sample>=3 && sample<23));
-            assert(x==(held?0:90) && y==(held?0:-20));
+            assert(x==(held?0:90) && y==(held?0:-45));
         }
         close(fd[0]);close(fd[1]);
     }
@@ -165,7 +165,70 @@ static void test_monitor_pointer(void) {
     assert(read(pair[1],line,sizeof(line))<0 && errno==EAGAIN);
     close(pair[0]);close(pair[1]);
 }
+static void check_raw_remap(void) {
+    struct raw_bindings raw={0};
+    raw.map[0]=16;raw.map[3]=38;
+    assert(!needs_raw_output(raw.map));
+    raw.map[4]=2;raw.map[5]=2;
+    assert(needs_raw_output(raw.map));
+    int fds[2];assert(pipe2(fds,O_NONBLOCK)==0);
+    struct input_event e;
+    assert(raw_keys(fds[1],&raw,1<<4));
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==BTN_LEFT && e.value==1);
+    assert(raw_keys(fds[1],&raw,3<<4) && raw_keys(fds[1],&raw,1<<5));
+    assert(read(fds[0],&e,sizeof(e))<0 && errno==EAGAIN);
+    assert(raw_keys(fds[1],&raw,0));
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==BTN_LEFT && e.value==0);
+    raw.map[5]=5;
+    assert(raw_keys(fds[1],&raw,1<<5) && raw_keys(fds[1],&raw,1<<5));
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_WHEEL && e.value==1);
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_WHEEL_HI_RES && e.value==120);
+    assert(read(fds[0],&e,sizeof(e))<0 && errno==EAGAIN);
+    struct gamepad_state d={0};
+    d.axes[ABS_X]=(struct input_absinfo){.minimum=-32768,.maximum=32767,.value=-12345};
+    raw.map[13]=21;d.last[0]=1<<13;
+    assert(mapped_gamepad(fds[1],&d,&raw));
+    int button=0,axis=0;
+    while(read(fds[0],&e,sizeof(e))==sizeof(e)) {
+        if(e.type==EV_ABS && e.code==ABS_X)axis=e.value;
+        if(e.type==EV_KEY && e.value){assert(e.code==BTN_EAST);button++;}
+    }
+    assert(axis==-12345 && button==1);
+    // On the BLE gamepad the printed B is in the Xbox A (south) position.
+    d.ble_pad=1;
+    d.last[0]=(1<<12)|(1<<16);
+    assert(mapped_gamepad(fds[1],&d,&raw));
+    int south=0,star=0;
+    while(read(fds[0],&e,sizeof(e))==sizeof(e))if(e.type==EV_KEY && e.value) {
+        if(e.code==BTN_SOUTH)south++;
+        else if(e.code==BTN_GAMEPAD+15)star++;
+        else assert(0);
+    }
+    assert(south==1 && star==1);
+    const int physical_face[]={13,12,4,5}; // Printed A, B, X, Y
+    const int android_face[]={BTN_SOUTH,BTN_EAST,BTN_NORTH,BTN_WEST};
+    for(int ble=0;ble<=1;ble++)for(int xbox=0;xbox<=1;xbox++){
+        d.ble_pad=ble;
+        for(int i=0;i<4;i++)raw.map[physical_face[i]]=20+(i^xbox);
+        raw.map[16]=41;
+        for(int i=0;i<4;i++){
+            d.last[0]=(1<<physical_face[i])|(1<<16);
+            assert(mapped_gamepad(fds[1],&d,&raw));
+            int pressed=0;
+            while(read(fds[0],&e,sizeof(e))==sizeof(e))if(e.type==EV_KEY && e.value){
+                assert(e.code==android_face[i^xbox]);
+                pressed++;
+            }
+            assert(pressed==1);
+        }
+    }
+    close(fds[0]);close(fds[1]);
+}
 int main(int argc,char **argv) {
+    assert(other_mode_address("02:00:00:00:01:5b","02:00:00:00:01:9B"));
+    assert(!other_mode_address("02:00:00:00:01:5b","02:00:00:00:02:9B"));
+    assert(!other_mode_address("02:00:00:00:01:5b","02:00:00:00:01:DB"));
+    check_raw_remap();
     struct profile measured={0};
     const char *calibrated="F 100 100 3 0 0 0 50 50 1 100 100 1 3 0 0 0 50 50 1 100 100 1 1 -80 10 12 92 -90 -9 -7 70 -100 3 4 96 -64 5 7 88";
     assert(parse_profile(calibrated,&measured));
@@ -174,24 +237,38 @@ int main(int argc,char **argv) {
     assert(slot_axis(&measured,0,52)==63.5 && slot_axis(&measured,0,120)==127);
     assert(slot_axis(&measured,3,6)==0 && slot_axis(&measured,3,-64)==-127);
     assert(slot_axis(&measured,2,96)==127);
+    char full_profile[256];
+    snprintf(full_profile,sizeof(full_profile),"%s 2000 42 43",calibrated);
+    assert(parse_profile(full_profile,&measured) && measured.stick_percent==2000);
+    snprintf(full_profile,sizeof(full_profile),"%s 2001 42 43",calibrated);
+    assert(!parse_profile(full_profile,&measured));
     if(argc==2 && !strcmp(argv[1],"--rest-replay")) {replay_gyro_zero();return 0;}
     test_monitor_pointer();
     test_gyro_cadence();
     test_click_hold();
-    assert(replay_wheel(13,127)==1800 && replay_wheel(32,-127)==-1800);
+    assert(replay_wheel(13,127,100)==900 && replay_wheel(32,-127,100)==-900);
+    assert(replay_wheel(13,127,300)==2700 && replay_wheel(32,-127,300)==-2700);
     const char *curves=" 3 0 0 0 15 0 0 100 40 0 3 0 0 0 15 0 0 100 40 0 0";
     char line[160];
     struct profile maximum={0};
     snprintf(line,sizeof(line),"C 500 500%s",curves);
     assert(parse_profile(line,&maximum) && maximum.gx==500 && maximum.gy==500);
-    snprintf(line,sizeof(line),"C 501 500%s",curves);
+    snprintf(line,sizeof(line),"F 4000 2000%s",curves);
+    assert(parse_profile(line,&maximum) && maximum.gx==4000 && maximum.gy==2000);
+    snprintf(line,sizeof(line),"F 2000 4000%s",curves);
+    assert(parse_profile(line,&maximum) && maximum.gx==2000 && maximum.gy==4000);
+    snprintf(line,sizeof(line),"F 4001 2000%s",curves);
+    assert(!parse_profile(line,&maximum));
+    snprintf(line,sizeof(line),"C 2000 2000%s",curves);
+    assert(parse_profile(line,&maximum) && maximum.gx==2000 && maximum.gy==2000);
+    snprintf(line,sizeof(line),"C 2001 2000%s",curves);
     assert(!parse_profile(line,&maximum));
     int fds[2]; assert(pipe2(fds,O_NONBLOCK)==0);
     struct motion gyro={.source=1,.dx=15,.dy=-10};
     assert(flush_motion(fds[1],&gyro,&maximum,1000000));
     struct input_event e;
-    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_X && e.value==75);
-    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_Y && e.value==-50);
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_X && e.value==300);
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_Y && e.value==-200);
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.type==EV_SYN);
     snprintf(line,sizeof(line),"C 100 100%s",curves);
     assert(parse_profile(line,&maximum));
@@ -208,7 +285,7 @@ int main(int argc,char **argv) {
     fake_ms+=10;
     assert(advance_pointer(fds[1],&raw,fake_ms));
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_X && e.value==90);
-    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_Y && e.value==-20);
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_Y && e.value==-45);
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.type==EV_SYN);
     snprintf(line,sizeof(line),"C 0 0%s",curves);
     assert(parse_profile(line,&maximum));
@@ -220,33 +297,57 @@ int main(int argc,char **argv) {
     while(read(fds[0],&e,sizeof(e))==sizeof(e)) assert(e.type!=EV_REL);
     snprintf(line,sizeof(line),"C 500 500%s",curves);
     assert(parse_profile(line,&maximum));
-    raw.source=1408; raw.raw_x=1024; raw.raw_y=-512;
+    raw.source=1408; raw.raw_x=1024; raw.raw_y=-1024;
     assert(flush_motion(fds[1],&raw,&maximum,1120000));
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.type==EV_SYN);
     fake_ms+=10;
     assert(advance_pointer(fds[1],&raw,fake_ms));
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_X && e.value==450);
-    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_Y && e.value==-100);
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_Y && e.value==-450);
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.type==EV_SYN);
-    // Full positive wheel tilt at 50% output yields 18 high-resolution
-    // units in 10 ms. The firmware wheel notch must not be applied again.
+    // A curve capped at 50% emits 60 units immediately.
     snprintf(line,sizeof(line),"C 100 100 3 0 0 0 15 0 0 100 50 0 3 0 0 0 15 0 0 100 50 0 0 3 0 0 1 50 50 1 100 100 1");
     assert(parse_profile(line,&maximum));
     raw.source=1536; raw.raw_x=127; raw.raw_y=0; raw.notches=1;
     assert(flush_motion(fds[1],&raw,&maximum,1130000));
     assert(fabs(raw.vx-1.22)<.0001 && raw.vy==0);
-    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.type==EV_SYN);
-    assert(advance_wheel(fds[1],&raw,now_ms()+10,0));
-    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_WHEEL_HI_RES && e.value==18);
+    assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.code==REL_WHEEL_HI_RES && e.value==60);
     assert(read(fds[0],&e,sizeof(e))==sizeof(e) && e.type==EV_SYN);
     close(fds[0]); close(fds[1]);
     for(int mask=0;mask<262144;mask++)
         assert(button_snapshot((mask&511)+1,(mask>>9)+1)==mask);
     assert(button_snapshot(0,1)==-1 && button_snapshot(1,513)==-1);
-    int uniform=replay_stick(12);
-    assert(uniform==replay_stick(28));
+    int uniform=replay_stick(12,100);
+    assert(uniform==replay_stick(28,100));
+    assert(abs(replay_stick(12,1000)-2*replay_stick(12,500))<=1);
+    assert(abs(replay_stick(12,2000)-2*replay_stick(12,1000))<=1);
     struct motion m={.dx=1,.previous_motion=10000,.speed=12.5};
     assert(fabs(measured_speed(&m,90000)-12.5)<.0001);
+    // D-mode RAW passes through both sticks. The two profile curves transform them independently.
+    struct gamepad_state pad={0};
+    struct raw_bindings mapping={0};
+    int axis_codes[]={ABS_X,ABS_Y,ABS_Z,ABS_RZ};
+    int physical[]={255,128,0,128};
+    for(int i=0;i<4;i++){
+        pad.axes[axis_codes[i]]=(struct input_absinfo){.minimum=0,.maximum=255,.value=physical[i]};
+        pad.last[i+1]=i==0?127:i==2?-127:0;
+    }
+    mapping.stick_profile.cursor_curve=(struct spline){.count=2,.x={0,100},.y={0,50},.slope={.5,.5}};
+    mapping.stick_profile.scroll_curve=(struct spline){.count=2,.x={0,100},.y={0,100},.slope={1,1}};
+    for(int apply=0;apply<=1;apply++){
+        mapping.shape_sticks=apply;
+        int events[2];assert(pipe(events)==0);
+        assert(mapped_gamepad(events[1],&pad,&mapping));
+        close(events[1]);
+        int axes_read=0;
+        while(read(events[0],&e,sizeof(e))==sizeof(e))if(e.type==EV_ABS){
+            for(int i=0;i<4;i++)if(e.code==axis_codes[i]){
+                assert(e.value==(apply && i==0?191:physical[i]));
+                axes_read++;
+            }
+        }
+        close(events[0]);assert(axes_read==4);
+    }
     puts("PASS");
 }
 

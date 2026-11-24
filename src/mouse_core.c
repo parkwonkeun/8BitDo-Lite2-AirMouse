@@ -34,7 +34,7 @@ static unsigned slow_response(unsigned radius) {
     return response ? response : 1;
 }
 
-static unsigned stick_radius(unsigned squared) {
+static __attribute__((section(".settings"),noinline)) unsigned stick_radius(unsigned squared) {
     unsigned radius = 0;
     for (unsigned bit = 128; bit; bit >>= 1) {
         unsigned next = radius | bit;
@@ -62,7 +62,7 @@ static void move(MouseState *s, int32_t x, int32_t y, uint32_t dt, uint8_t *outp
 /* Accumulate direction evidence, in capped milliseconds. Individual noise
    spikes and delayed samples cannot by themselves open the fine-motion gate.
    Keep the calibrated output linear once the direction is established. */
-static int32_t fine_gyro(int32_t value, int16_t *trend, int32_t *trim, uint32_t dt) {
+static __attribute__((section(".settings"),noinline)) int32_t fine_gyro(int32_t value, int16_t *trend, int32_t *trim, uint32_t dt) {
     int32_t residual = value * 256 - *trim / 64;
     int32_t level = magnitude(residual);
     int32_t elapsed = dt > 10 ? 10 : (int32_t)dt;
@@ -133,6 +133,34 @@ static __attribute__((section(".gravity"),noinline)) void calibrate_gyro(MouseSt
     }
 }
 
+static __attribute__((noinline)) unsigned gain_gesture(MouseState *s,unsigned buttons,unsigned dt) {
+    unsigned previous=s->previous_triggers;
+    s->previous_triggers=buttons;
+    s->tap_ms=dt>=s->tap_ms ? 0 : s->tap_ms-dt;
+    if (buttons!=1 && buttons!=2) {
+        s->repeat_ms=0;
+        if (buttons==3) s->last_gain_button=0;
+        return 0;
+    }
+    if (buttons!=previous) {
+        if (previous==3) return 0;
+        unsigned step=s->last_gain_button==buttons && s->tap_ms ? 5 : 1;
+        s->last_gain_button=buttons;
+        s->tap_ms=201;
+        s->repeat_ms=400;
+        return step;
+    }
+    if (!s->repeat_ms) return 0;
+    if (dt<s->repeat_ms) {s->repeat_ms-=dt;return 0;}
+    s->repeat_ms=120;
+    return 5;
+}
+
+static __attribute__((noinline)) int scale_velocity(int v,int gain) {
+    /* Split before multiplication to retain signed 32-bit headroom at 2000%. */
+    return (v/10000)*gain + (v%10000)*gain/10000;
+}
+
 int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
                 uint32_t dt, uint8_t output[9], uint32_t axes) {
     for (uint32_t i = 0; i < 9; ++i) output[i] = 0;
@@ -162,21 +190,11 @@ int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
     int32_t wheel_offset = 128 - (int32_t)(axes >> 24);
     int32_t tilt = magnitude(wheel_offset) * 100 > 15 * 127;
     int32_t direction = tilt <= 0 ? 0 : (wheel_offset > 0 ? 1 : -1);
-    if (direction != s->wheel_direction || dt > 100) {
+    int new_scroll = direction != s->wheel_direction;
+    if (new_scroll || dt > 100) {
         s->wheel_phase = 0;
-        s->wheel_direction = direction;
-        output[5] = output[6] = (uint8_t)direction;
-    } else if (direction) {
-        /* 150000 phase units per detent, 2500 per Bluetooth subdivision.
-           Keep the original slow curve and the 15 detents/sec maximum. */
-        int32_t phase = s->wheel_phase + (int32_t)slow_response(magnitude(wheel_offset)) * 9 * (int32_t)dt;
-        output[6] = (uint8_t)((phase/2500 - s->wheel_phase/2500) * direction);
-        while (phase >= 150000) {
-            output[5] += direction;
-            phase -= 150000;
-        }
-        s->wheel_phase = phase;
     }
+    s->wheel_direction = direction;
     if (dt > 100) {
         s->tilt_variance=0;
         s->yaw_rate=s->pitch_rate=0;
@@ -224,6 +242,38 @@ int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
     }
 
     int stick = s->pointer_mode == MODE_STICK || (s->pointer_mode == MODE_AUTO && s->auto_stick);
+    unsigned triggers = (buttons >> 14) & 3;
+    unsigned step = gain_gesture(s,triggers,dt);
+    /* X is transmitted to slots in 5-bit buckets, Y at full precision. */
+    unsigned right_bucket = (axes >> 19) & 31;
+    int target = direction || right_bucket <= 12 || right_bucket >= 19 ? 2 : stick;
+    if (step) {
+        int gain = s->gain_units[target] ? (int)s->gain_units[target] : GAIN_DEFAULT;
+        int change = (gain*(int)step+50)/100;
+        gain += triggers==2 ? change : -change;
+        int maximum = target==2 ? WHEEL_GAIN_MAX : (stick ? STICK_GAIN_MAX : GYRO_GAIN_MAX);
+        if (gain<GAIN_MIN) gain=GAIN_MIN;
+        if (gain>maximum) gain=maximum;
+        s->gain_units[target]=gain;
+    }
+    if (direction) {
+        unsigned gain=s->gain_units[2] ? s->gain_units[2] : GAIN_DEFAULT;
+        /* The timer depends only on LT/RT. Tilt controls each event's delta. */
+        enum { WHEEL_PERIOD = GAIN_DEFAULT * 1000 };
+        s->wheel_phase += new_scroll ? WHEEL_PERIOD : 15 * (int)gain * (int)dt;
+        unsigned delta = (slow_response(magnitude(wheel_offset))*120+125)/250;
+        if (!delta) delta=1;
+        int units=0;
+        while (s->wheel_phase>=WHEEL_PERIOD) {
+            units+=(int)delta;
+            s->wheel_phase-=WHEEL_PERIOD;
+        }
+        s->wheel_remainder+=units*direction;
+        output[5]=(uint8_t)(s->wheel_remainder/120);
+        s->wheel_remainder%=120;
+        put_signed16(output+6,units*direction);
+    }
+    int scale = s->gain_units[stick] ? (int)s->gain_units[stick] : GAIN_DEFAULT;
     uint8_t clicks = output[0];
     if (stick) s->click_ms = 0;
     else if (clicks != s->previous_clicks) s->click_ms = (clicks & ~s->previous_clicks) ? 200 : 0;
@@ -232,7 +282,7 @@ int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
     s->previous_clicks = clicks;
     if (stick) {
         unsigned radius = stick_radius(radius_squared);
-        int32_t speed = slow_response(radius) * 5;
+        int32_t speed = scale_velocity((int)slow_response(radius)*5,scale);
         int32_t divisor = radius ? (int32_t)radius : 1;
         move(s, speed * stick_x / divisor, speed * stick_y / divisor, dt, output, 1);
     } else if (gyro_valid) {
@@ -243,7 +293,7 @@ int mouse_step(MouseState *s, const int16_t imu[6], uint32_t buttons,
             if (magnitude(gyro_x) < 32) gyro_x = 0;
             if (magnitude(gyro_y) < 32) gyro_y = 0;
         }
-        if (!hold) move(s, gyro_x * 9, gyro_y * 4, dt, output, 0);
+        if (!hold) move(s, scale_velocity(gyro_x*9,scale), scale_velocity(gyro_y*9,scale), dt, output, 0);
     } else {
         s->fine_x = s->fine_y = 0;
     }

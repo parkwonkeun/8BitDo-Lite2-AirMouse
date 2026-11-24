@@ -17,23 +17,47 @@ final class Profiles {
         "포인터 모드 전환","","다음 슬롯","슬롯 1","슬롯 2","슬롯 3",
         "게임패드 A","게임패드 B","게임패드 X","게임패드 Y","십자키 위","십자키 아래",
         "십자키 왼쪽","십자키 오른쪽","게임패드 LB","게임패드 RB","게임패드 LT","게임패드 RT",
-        "게임패드 L3","게임패드 R3","Start","Select","Capture","게임패드 Home","이전 슬롯","볼륨 올리기","볼륨 내리기"
+        "게임패드 L3","게임패드 R3","Start","Select","Capture","게임패드 Home","이전 슬롯","볼륨 올리기","볼륨 내리기","슬롯 전환","포인터 속도 낮추기","포인터 속도 높이기"
     };
     static final String[] CURVES = {"균형", "초반 빠르게", "초반 느리게", "직선", "직접 그리기"};
-    static final int NO_CHANGE = -2, RAW = -1, SLOT_COUNT = 3;
-    static final int MAX_GYRO_PERCENT = 500;
+    static final int NO_CHANGE = -2, RAW = -1, SLOT_COUNT = 3, XBOX=3, SWITCH=4, STAR=16;
+    static int[] slots(boolean s) {return s?new int[]{RAW,0,1,2}:new int[]{RAW,XBOX,SWITCH,0,1,2};}
+    static boolean validSlot(boolean s,int slot) {return slot>=RAW && slot<=(s?2:SWITCH);}
+    static String slotLabel(int language,int slot) {
+        if(slot==XBOX)return "Xbox";
+        if(slot==SWITCH)return "Switch";
+        return slot==RAW?"RAW":Words.get(language,"슬롯 %d",slot+1);
+    }
+    static boolean fixedLayout(boolean airMouse,int slot) {
+        return !airMouse && (slot==XBOX || slot==SWITCH);
+    }
+    // The printed face order is east, south, north, west on Lite 2.
+    static int faceIndex(int slot,int button) {
+        return slot==XBOX && button<4?button^1:button;
+    }
+    static boolean gamepadBinding(int id){return id==0 || (id>=20 && id<=37);}
+    static final int MAX_SPEED_PERCENT = 2000, MAX_STICK_PERCENT = 2000;
     // Action IDs are stored in existing slots. Keep the removed gyro-zero ID reserved.
     static final int OLD_GYRO_ZERO=15, NEXT_SLOT=16, PREVIOUS_SLOT=38, VOLUME_UP=39, VOLUME_DOWN=40;
+    static final int CYCLE_SLOT=41, SPEED_DOWN=42, SPEED_UP=43;
     static final int LB=8, RB=9;
     static int[] assignableActions(boolean airMouse) {
         return java.util.stream.IntStream.range(0,ACTIONS.length)
-            .filter(id->id!=OLD_GYRO_ZERO && (!airMouse || id<20 || id>=PREVIOUS_SLOT))
+            .filter(id->(airMouse || id<SPEED_DOWN) && id!=OLD_GYRO_ZERO && (!airMouse || id<20 || id>=PREVIOUS_SLOT))
             .toArray();
     }
-    static final int LT=10, RT=11;
+    static final int[] FIRMWARE_ACTIONS={8,7,3,2,10,11,12,13,VOLUME_DOWN,VOLUME_UP,SPEED_DOWN,SPEED_UP,14,1,1,1,9,9};
+    static final int LT=10, RT=11, PLUS=14, MINUS=15;
     static int targetSlot(int active,int action) {
-        if(action==PREVIOUS_SLOT)return active==RAW?SLOT_COUNT-1:active-1;
-        if(action==NEXT_SLOT)return active==SLOT_COUNT-1?RAW:active+1;
+        return targetSlot(true,active,action);
+    }
+    static int targetSlot(boolean s,int active,int action) {
+        int[] order=slots(s);
+        int at=0;
+        while(at<order.length && order[at]!=active)at++;
+        if(at==order.length)return NO_CHANGE;
+        if(action==PREVIOUS_SLOT)return order[(at+order.length-1)%order.length];
+        if(action==NEXT_SLOT || action==CYCLE_SLOT)return order[(at+1)%order.length];
         if(action>NEXT_SLOT && action<=NEXT_SLOT+SLOT_COUNT)return action-NEXT_SLOT-1;
         return NO_CHANGE;
     }
@@ -41,7 +65,7 @@ final class Profiles {
     // Physical scanner bit number to button index used by persisted profiles.
     static final int[] SCAN_BUTTON={14,12,13,15,2,3,7,6,5,4,8,9,1,0,LT,RT,16,17};
     void applyVolumePresses(Profile profile,int active,int down) {
-        if(active==RAW || profile==null)return;
+        if(active==RAW || profile==null || !profile.airMouse)return;
         int delta=0;
         for(int bit=0;bit<SCAN_BUTTON.length;bit++) {
             if((down&(1<<bit))==0)continue;
@@ -57,14 +81,29 @@ final class Profiles {
         for(int bit=0;bit<SCAN_BUTTON.length;bit++)if((down&(1<<bit))!=0) {
             int button=SCAN_BUTTON[bit];
             int action=profile!=null?profile.map[button]:
-                button==LT?PREVIOUS_SLOT:button==RT?NEXT_SLOT:0;
-            if(active==RAW && action!=NEXT_SLOT && action!=PREVIOUS_SLOT)continue;
-            int target=targetSlot(active,action);
+                button==MINUS?PREVIOUS_SLOT:button==PLUS?NEXT_SLOT:0;
+            int target=targetSlot(profile==null || profile.airMouse,active,action);
             if(target==NO_CHANGE)continue;
             if(next!=NO_CHANGE && next!=target)return NO_CHANGE;
             next=target;
         }
         return next;
+    }
+    // Change routes only after a navigation button is released. Its held
+    // reports can then never start a second navigation in the new route.
+    static final class SlotPress {
+        int pending=NO_CHANGE,buttons,origin;
+        void reset(){pending=NO_CHANGE;buttons=0;}
+        int update(Profile p,int active,int held,int down) {
+            if(pending!=NO_CHANGE) {
+                if(active!=origin || (down&~buttons)!=0){reset();return NO_CHANGE;}
+                if((held&buttons)==0){int result=pending;reset();return result;}
+                return NO_CHANGE;
+            }
+            int next=slotForPresses(p,active,down);
+            if(next!=NO_CHANGE && next!=active){pending=next;buttons=down;origin=active;}
+            return NO_CHANGE;
+        }
     }
     static final class LegacyCurve {
         int dead = 14, gain = 100, curve = 0;
@@ -107,21 +146,35 @@ final class Profiles {
     static final class Stick {
         final StickCalibration calibration=new StickCalibration();
         static final int SCALE=10000, STEP=100, MIN=3, MAX=7;
+        final boolean gamepad;
         final int defaultCurve;
         final int[] x=new int[MAX], y=new int[MAX];
         int count=5, curve;
         LegacyCurve source;
 
         Stick(boolean s) {
+            gamepad=!s;
             defaultCurve=s?0:3;
             preset(defaultCurve);
         }
         void preset(int kind) {
             source=new LegacyCurve();
-            source.dead=15;
-            source.gain=50;
+            source.dead=gamepad?10:15;
+            source.gain=gamepad?100:50;
             source.curve=curve=kind;
             sampleSource();
+        }
+        void migrateGamepadRange() {
+            if(source!=null && curve!=4) {
+                preset(curve);
+                return;
+            }
+            int maximum=y[count-1];
+            if(maximum==SCALE)return;
+            startCustom();
+            if(maximum>0)for(int i=0;i<count;i++)
+                y[i]=snap(Math.round((float)y[i]*SCALE/maximum));
+            y[count-1]=SCALE;
         }
         private boolean isPreviousFactoryPreset() {
             if(source.curve==4)return false;
@@ -288,25 +341,41 @@ final class Profiles {
     static final class Profile {
         final Stick left, right;
         final boolean airMouse;
+        final int slot;
+        boolean localFavorite;
         boolean clickHold=true;
-        int gyroMax=100, holdMs=2000;
+        double gyroMax=100, stickSpeed=100, wheelSpeed=100;
+        // -100 doubles horizontal, +100 doubles vertical.
+        int gyroBalance;
+        int holdMs=2000;
+
+        int horizontalGyroPercent() { return 100+Math.max(0,-gyroBalance); }
+        int verticalGyroPercent() { return 100+Math.max(0,gyroBalance); }
         final int[] map=new int[BUTTONS.length];
-        Profile(boolean s) {
+        Profile(boolean s) {this(s,0);}
+        Profile(boolean s,int slot) {
             airMouse=s;
+            this.slot=slot;
             left=new Stick(s);right=new Stick(s);
             if (s) {
-                int[] defaults={8,7,3,2,10,11,12,13,1,1,PREVIOUS_SLOT,NEXT_SLOT,14,0,1,1,9,9};
+                int[] defaults={8,7,3,2,10,11,12,13,1,1,SPEED_DOWN,SPEED_UP,14,0,NEXT_SLOT,PREVIOUS_SLOT,9,9};
                 System.arraycopy(defaults,0,map,0,defaults.length);
 
             }
-            map[LB]=VOLUME_UP;map[RB]=VOLUME_DOWN;
+            if(s){map[LB]=VOLUME_DOWN;map[RB]=VOLUME_UP;}
+            else {map[STAR]=CYCLE_SLOT;enforceLayout();}
+        }
+        private void enforceLayout(){
+            if(!fixedLayout(airMouse,slot))return;
+            for(int i=0;i<map.length;i++)if(i!=STAR)
+                map[i]=i<4?20+faceIndex(slot,i):0;
         }
         String encode() {
             try {
                 JSONArray keys=new JSONArray();
                 for (int action:map) keys.put(action);
-                return new JSONObject().put("schema",1).put("volumeBindings",true).put("triggerSlots",true).put("left",left.json())
-                    .put("right",right.json()).put("gyroMax",gyroMax)
+                return new JSONObject().put("schema",1).put("gamepadDefaultsV2",!airMouse).put("volumeBindings",true).put("rightVolumeUp",true).put("triggerSlots",true).put("menuSlotButtons",true).put("speedButtons",true).put("left",left.json())
+                    .put("right",right.json()).put("gyroMax",gyroMax).put("gyroBalance",gyroBalance).put("stickSpeed",stickSpeed).put("wheelSpeed",wheelSpeed)
                     .put("clickHold",clickHold).put("hold",holdMs).put("buttons",keys).toString();
             } catch(JSONException e) { throw new AssertionError(e); }
         }
@@ -316,9 +385,17 @@ final class Profiles {
                 JSONObject data=new JSONObject(json);
                 if (data.optInt("schema")!=1) return;
                 left.read(data.optJSONObject("left")); right.read(data.optJSONObject("right"));
-                int oldX=limit(data.optInt("gx",100),0,MAX_GYRO_PERCENT);
-                int oldY=limit(data.optInt("gy",100),0,MAX_GYRO_PERCENT);
-                gyroMax=limit(data.optInt("gyroMax",(oldX+oldY+1)/2),0,MAX_GYRO_PERCENT);
+                localFavorite=data.optBoolean("gamepadDefaultsV2");
+                if(!airMouse && !localFavorite){
+                    left.migrateGamepadRange();
+                    right.migrateGamepadRange();
+                }
+                int oldX=limit(data.optInt("gx",100),0,MAX_SPEED_PERCENT);
+                int oldY=limit(data.optInt("gy",100),0,MAX_SPEED_PERCENT);
+                gyroMax=Math.max(0,Math.min(MAX_SPEED_PERCENT,data.optDouble("gyroMax",(oldX+oldY+1)/2)));
+                gyroBalance=limit(data.optInt("gyroBalance",0),-100,100);
+                wheelSpeed=Math.max(5,Math.min(300,data.optDouble("wheelSpeed",100)));
+                stickSpeed=Math.max(5,Math.min(MAX_STICK_PERCENT,data.optDouble("stickSpeed",100)));
                 clickHold=data.optBoolean("clickHold",true);
                 holdMs=limit(data.optInt("hold",holdMs),0,5000);
                 JSONArray keys=data.optJSONArray("buttons");
@@ -328,14 +405,35 @@ final class Profiles {
                 }
                 if(!data.optBoolean("volumeBindings") && keys!=null) {
                     int oldDefault=airMouse?1:0;
-                    if(keys.optInt(LB,-1)==oldDefault)map[LB]=VOLUME_UP;
-                    if(keys.optInt(RB,-1)==oldDefault)map[RB]=VOLUME_DOWN;
+                    if(keys.optInt(LB,-1)==oldDefault)map[LB]=VOLUME_DOWN;
+                    if(keys.optInt(RB,-1)==oldDefault)map[RB]=VOLUME_UP;
+                } else if(keys!=null && !data.optBoolean("rightVolumeUp")) {
+                    if(map[LB]==VOLUME_UP)map[LB]=VOLUME_DOWN;
+                    if(map[RB]==VOLUME_DOWN)map[RB]=VOLUME_UP;
                 }
                 if(airMouse && !data.optBoolean("triggerSlots") && keys!=null) {
                     if(keys.optInt(LT,-1)==1)map[LT]=PREVIOUS_SLOT;
                     if(keys.optInt(RT,-1)==1)map[RT]=NEXT_SLOT;
                 }
+                if(airMouse && !data.optBoolean("menuSlotButtons") && keys!=null) {
+                    migrateNavigation(LT,MINUS,PREVIOUS_SLOT);
+                    migrateNavigation(RT,PLUS,NEXT_SLOT);
+                }
+                if(airMouse && keys!=null && !data.optBoolean("speedButtons")) {
+                    if(map[LT]==1)map[LT]=SPEED_DOWN;
+                    if(map[RT]==1)map[RT]=SPEED_UP;
+                }
+                if(!airMouse && !localFavorite && map[STAR]==0)map[STAR]=CYCLE_SLOT;
             } catch(JSONException ignored) { }
+            enforceLayout();
+            if(!airMouse)for(int i=0;i<map.length;i++)
+                if(i!=STAR && !gamepadBinding(map[i]))map[i]=0;
+        }
+        private void migrateNavigation(int oldButton,int newButton,int action) {
+            if(map[oldButton]==action && (map[newButton]==1 || map[newButton]==action)) {
+                map[newButton]=action;
+                map[oldButton]=1;
+            }
         }
     }
     static int limit(int n,int lo,int hi) { return Math.min(hi,Math.max(lo,n)); }
@@ -345,31 +443,104 @@ final class Profiles {
         context=owner.getApplicationContext();
         preferences=context.getSharedPreferences("profiles.v1",android.content.Context.MODE_PRIVATE);
     }
-    Profile load(boolean s,int slot) {
-        if(slot==RAW) return null;
-        Profile profile=new Profile(s);
+    private Profile stored(boolean s,int slot) {
+        Profile profile=defaults(s,slot);
         profile.decode(preferences.getString((s?"S":"D")+slot,null));
         return profile;
     }
+    static Profile defaults(boolean s,int slot){
+        if(slot==RAW)return rawDefaults(s);
+        return new Profile(s,slot);
+    }
+    Profile load(boolean s,int slot) {
+        Profile p=stored(s,slot);
+        if(p!=null)applyCycleButtons(p);
+        return p;
+    }
+    private void applyCycleButtons(Profile p) {
+        int mask=preferences.getInt(p.airMouse?"cycleButtonsS":"cycleButtonsD",0);
+        if(!p.airMouse)mask=p.localFavorite?0:mask & (1<<STAR);
+        for(int i=0;i<p.map.length;i++)if((mask&(1<<i))!=0)p.map[i]=CYCLE_SLOT;
+    }
     Profile navigation(boolean s) {
-        int slot=active(s);
-        if(slot!=RAW)return load(s,slot);
-        int last=preferences.getInt(s?"rawNavS":"rawNavD",RAW);
-        return last==RAW?null:load(s,last);
+        return load(s,active(s));
+    }
+    static Profile rawDefaults(boolean s) {
+        Profile p=new Profile(s,RAW);
+        java.util.Arrays.fill(p.map,0);
+        if(s){p.map[PLUS]=NEXT_SLOT;p.map[MINUS]=PREVIOUS_SLOT;}else p.map[STAR]=CYCLE_SLOT;
+        return p;
     }
     void save(boolean s,int slot,Profile profile) {
-        preferences.edit().putString((s?"S":"D")+slot,profile.encode()).apply();
+        Profile local=defaults(s,slot);
+        local.decode(profile.encode());
+        if(!s){
+            preferences.edit().putString("D"+slot,local.encode()).apply();
+            return;
+        }
+        Profile before=stored(s,slot);
+        int mask=0;
+        for(int i=0;i<local.map.length;i++)if(local.map[i]==CYCLE_SLOT) {
+            mask|=1<<i;
+            local.map[i]=before.map[i];
+        }
+        preferences.edit().putInt(s?"cycleButtonsS":"cycleButtonsD",mask)
+            .putString((s?"S":"D")+slot,local.encode()).apply();
+    }
+
+    static String speedText(double value) {
+        return java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
+    }
+    static final class SpeedGesture {
+        int lastBit, heldBit, target=-1;
+        long lastPress, repeatAt;
+        void reset() {lastBit=heldBit=0;target=-1;}
+        boolean adjust(Profile p,int slot,int source,int held,int down,long now) {
+            if(target!=slot) {reset();target=slot;}
+            int bit=0,action=0;
+            for(int i=0;i<SCAN_BUTTON.length;i++) if((held&(1<<i))!=0) {
+                int binding=p.map[SCAN_BUTTON[i]];
+                if(binding!=SPEED_UP && binding!=SPEED_DOWN)continue;
+                if(bit!=0) {reset();return false;}
+                bit=1<<i;action=binding;
+            }
+            if(bit==0) {heldBit=0;return false;}
+            if(source<1 || source>3) return false;
+            int step;
+            if((down&bit)!=0) {
+                step=lastBit==bit && now-lastPress<=200 ? 5 : 1;
+                lastBit=heldBit=bit;lastPress=now;repeatAt=now+400;
+            } else {
+                if(heldBit!=bit || now<repeatAt)return false;
+                step=5;repeatAt=now+120;
+            }
+            double previous=source==3?p.wheelSpeed:source==2?p.stickSpeed:p.gyroMax;
+            long basis=Math.round(previous*100);
+            long change=(basis*step+50)/100;
+            int maximum=(source==3 ? 300 : source==2 ? MAX_STICK_PERCENT : MAX_SPEED_PERCENT)*100;
+            double value=Math.max(500,Math.min(maximum,basis+(action==SPEED_UP?change:-change)))/100.;
+            if(value==previous)return false;
+            if(source==3)p.wheelSpeed=value;else if(source==2)p.stickSpeed=value;else p.gyroMax=value;
+            return true;
+        }
+    }
+    void saveSpeed(int slot,Profile p,int source) {
+        Profile saved=stored(true,slot);
+        if(source==3)saved.wheelSpeed=p.wheelSpeed;else if(source==2)saved.stickSpeed=p.stickSpeed;else saved.gyroMax=p.gyroMax;
+        preferences.edit().putString("S"+slot,saved.encode()).apply();
+        android.util.Log.i("Lite2Slots","Saved S"+(slot+1)+" "+(source==3?"wheel ":source==2?"stick ":"gyro ")+
+            (source==3?saved.wheelSpeed:source==2?saved.stickSpeed:saved.gyroMax)+"%");
     }
     int active(boolean s) {
-        return limit(preferences.getInt(s?"activeS":"activeD",0),RAW,SLOT_COUNT-1);
+        int slot=preferences.getInt(s?"activeS":"activeD",0);
+        return validSlot(s,slot)?slot:0;
     }
     void select(boolean s,int slot) {
-        if(active(s)==slot)return;
+        if(!validSlot(s,slot) || active(s)==slot)return;
         SharedPreferences.Editor edit=preferences.edit();
-        if(slot==RAW)edit.putInt(s?"rawNavS":"rawNavD",active(s));
         edit.putInt(s?"activeS":"activeD",slot).apply();
         int language=limit(preferences.getInt("language",0),0,Words.COUNT-1);
-        String label=slot==RAW?"RAW":Words.get(language,"슬롯 %d",slot+1);
+        String label=slotLabel(language,slot);
         SlotOverlay.show(context,(s?"S  ·  ":"D  ·  ")+label);
         android.util.Log.i("Lite2Slots",(s?"S":"D")+" active slot "+(slot+1));
     }
