@@ -1,6 +1,6 @@
 # 소스에서 빌드하기
 
-## 펌웨어 r57
+## 펌웨어 r58
 
 8BitDo 공식 Lite 2 v1.06을 기반으로 Cortex-M0 Thumb 코드를 추가합니다. S 모드에서 센서·버튼 입력을 BLE 및 USB HID 마우스·키보드 보고서로 변환합니다. D 무선 연결은 별도의 BLE 게임패드로 등록됩니다. 공식 DAT에서 응용 프로그램 한 섹션을 읽어 패치하고 같은 형식으로 다시 패키징합니다. Yichip 형식 해독·재패키징에는 AeroModes의 8cryptdo 고정 리비전을 사용합니다. [8cryptdo 소스와 라이선스](https://github.com/aeromodes/8cryptdo/tree/aaffcebafa481631de9c1d722a5693d02234e43a)
 
@@ -13,23 +13,24 @@ python tools/prepare_sources.py
 python tools/build.py --ble-base
 python tools/package_patch.py --ble-base
 python tools/build_ble_controls.py --home-power --public
-python -m unittest discover -s tests -p test_public_r57.py
+python tools/build_button_idle.py --public
+python -m unittest discover -s tests -p test_button_idle.py
 ~~~
 
 | 이미지 | 크기 | SHA-256 |
 | --- | ---: | --- |
 | [공식 Lite 2 v1.06 DAT](http://dl.8bitdo.com:8080/firmwareFile/upload/8807004b-61a7-49f4-877f-f42d8f9cba70.dat) | 81,436 B | `121c1df789577997572373d049bfa245eb1fdae231223b0bb37463b257d3e27f` |
-| r57 DAT | 90,140 B | `cf5377bc9b2257df86cca2b2b9cc7389dac7ac92bc844076c07c03755d6800c4` |
+| r58 DAT | 90,140 B | `c776b803e8f95434c7043365ac51bcb9fae03199d6a1eddd47258fde4d5010fa` |
 
-앞의 두 빌드 단계는 BLE 코드가 사용하는 r50 메모리 배치를 재현하고 중간 이미지 해시를 검사합니다. 마지막 단계가 두 BLE 서비스와 HOME 2초 종료를 포함한 `build/Lite2AirMouse-r57-home-power-public.dat`를 만듭니다.
+앞의 두 빌드 단계는 BLE 코드가 사용하는 r50 메모리 배치를 재현하고 중간 이미지 해시를 검사합니다. 마지막 단계가 두 BLE 서비스, HOME 2초 종료, 마지막 버튼 입력 후 15분 자동 종료를 포함한 `build/Lite2AirMouse-r58-button-idle-public.dat`를 만듭니다.
 
 공개 펌웨어는 네 스틱 축의 중립값으로 128을 사용합니다. 각 사용자는 Android 앱에서 자기 슬롯의 영점과 최대 범위를 따로 저장할 수 있습니다.
 
 기기 없이 배포본에서 같은 DAT를 만들려면 Windows 키트 폴더에서 다음을 실행합니다.
 
 ~~~powershell
-.\Lite2Updater.exe --prepare-only .\Lite2AirMouse-r57.dat
-Get-FileHash .\Lite2AirMouse-r57.dat
+.\Lite2Updater.exe --prepare-only .\Lite2AirMouse-r58.dat
+Get-FileHash .\Lite2AirMouse-r58.dat
 ~~~
 
 최초 실행 시 공식 v1.06 DAT와 제조사 Windows 도구 ZIP을 내려받습니다. 오프라인 재사용 시에는 검증된 두 파일을 `Lite2-v1.06-official.dat`, `8BitDo_Firmware_Updater_Win.zip` 이름으로 같은 폴더에 두고 `--cache 폴더경로`를 지정할 수 있습니다. 제조사 ZIP의 SHA-256은 `88fd6af7eb62a33546415db75a40907ef9120d14f10c6cd7a4337ea59994a26f`입니다.
@@ -55,4 +56,4 @@ python -m pip install pyinstaller
 python tools/make_release.py
 ~~~
 
-`work/public-release-r57/assets`에 Windows 키트, Android 키트, APK와 SHA256SUMS.txt가 생성됩니다. Windows 키트에는 자체 실행 프로그램, x86 USB 기록 프로그램, r57 변경분이 들어 있습니다. 실행 시 제조사 입력 파일과 조립한 DAT의 해시를 대조합니다. 실제 기록은 D 모드 USB 기기를 확인하고 사용자가 R57을 입력한 뒤에 시작됩니다.
+`work/public-release-r58/assets`에 Windows 키트, Android 키트, APK와 SHA256SUMS.txt가 생성됩니다. Windows 키트에는 자체 실행 프로그램, x86 USB 기록 프로그램, r58 변경분이 들어 있습니다. 실행 시 제조사 입력 파일과 조립한 DAT의 해시를 대조합니다. 실제 기록은 D 모드 USB 기기를 확인하고 사용자가 R58을 입력한 뒤에 시작됩니다.

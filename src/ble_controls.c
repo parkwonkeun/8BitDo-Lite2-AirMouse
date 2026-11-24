@@ -31,7 +31,7 @@ typedef struct {
 #endif
 } Controls;
 #define S ((Controls *)0x2fb80)
-_Static_assert(sizeof(Controls)<=0x27c,"reserved BLE state");
+_Static_assert(sizeof(Controls)<=0x26c,"reserved BLE state");
 #ifdef BLE_MONITOR
 #define COPY_SECTION ".monitor_led"
 #else

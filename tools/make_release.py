@@ -1,4 +1,4 @@
-"""Package a built r57 image, companion APK and ARM64 bridge on Windows."""
+"""Package a built r58 image, companion APK and ARM64 bridge on Windows."""
 from hashlib import sha256
 import json
 import os
@@ -8,16 +8,16 @@ import subprocess
 import sys
 from zipfile import ZipFile, ZIP_DEFLATED
 
-from release_inputs import BASE_SHA, R57_SHA, verify
+from release_inputs import BASE_SHA, R58_SHA, verify
 
 root = Path(__file__).resolve().parents[1]
-work = root / 'work/public-release-r57'
+work = root / 'work/public-release-r58'
 assets = work / 'assets'
 dist = work / 'dist'
 assets.mkdir(parents=True, exist_ok=True)
 dist.mkdir(parents=True, exist_ok=True)
 base = verify((root / 'outputs/Lite2-v1.06-official.dat').read_bytes(), BASE_SHA, 'base')
-image = verify((root / 'build/Lite2AirMouse-r57-home-power-public.dat').read_bytes(), R57_SHA, 'r57')
+image = verify((root / 'build/Lite2AirMouse-r58-button-idle-public.dat').read_bytes(), R58_SHA, 'r58')
 runs = []
 start = None
 for i, byte in enumerate(image):
@@ -29,7 +29,7 @@ for i, byte in enumerate(image):
         start = None
 if start is not None:
     runs.append((start, image[start:].hex()))
-delta = work / 'r57.delta.json'
+delta = work / 'r58.delta.json'
 delta.write_text(json.dumps({'length': len(image), 'runs': runs}, separators=(',', ':')))
 helper = dist / 'NativeUpdaterFlash.exe'
 csc = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework/v4.0.30319/csc.exe'
@@ -38,7 +38,7 @@ subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile',
                 '--specpath', str(work), '--workpath', str(work / 'pyinstaller'), 'tools/windows_updater.py'], cwd=root, check=True)
 apk = assets / 'Lite2Control-0.3.38.apk'
 shutil.copyfile(root / 'android/build/Lite2Control-debug.apk', apk)
-windows = assets / 'Lite2AirMouse-r57-Windows-x64.zip'
+windows = assets / 'Lite2AirMouse-r58-Windows-x64.zip'
 android = assets / 'Lite2Control-0.3.38-Android-arm64.zip'
 with ZipFile(windows, 'w', ZIP_DEFLATED) as z:
     for file in (dist / 'Lite2Updater.exe', helper, delta, root / 'release/Update.cmd', root / 'README.md'):

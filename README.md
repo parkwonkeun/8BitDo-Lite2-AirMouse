@@ -2,22 +2,22 @@
 
 **r57부터 이 공개 배포본의 S·D 무선 연결은 Bluetooth Low Energy(BLE)를 사용합니다.** S는 앱 없이 쓸 수 있는 자이로·스틱 마우스와 키보드이고, D는 BLE 게임패드입니다. 같은 패드가 모드에 따라 서로 다른 이름과 BLE 주소로 연결됩니다.
 
-**이전 버전을 썼다면 새로 페어링하기 전에 휴대폰·태블릿 또는 PC의 블루투스 설정에서 이 패드의 기존 등록을 삭제하세요.** 아래 안내대로 S에서 **Lite2 Air Mouse**, D에서 **Lite2 GamePAD**를 각각 한 번 등록합니다. 펌웨어 설치에는 Windows PC와 D 모드 USB 연결이 필요합니다.
+**순정 또는 이전 시험판을 썼다면 새로 페어링하기 전에 휴대폰·태블릿 또는 PC의 블루투스 설정에서 이 패드의 기존 등록을 삭제하세요.** 공개 r57에서 r58로 업데이트할 때는 기존 등록을 유지해도 됩니다. 처음 등록할 때는 아래 안내대로 S에서 **Lite2 Air Mouse**, D에서 **Lite2 GamePAD**를 각각 한 번 등록합니다. 펌웨어 설치에는 Windows PC와 D 모드 USB 연결이 필요합니다.
 
 [최신 릴리스와 다운로드](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/latest) · [소스에서 빌드하기](docs/BUILD.md)
 
 | 원하는 작업 | 받을 파일 |
 | --- | --- |
-| Lite 2 펌웨어 업데이트 | [Windows 업데이트 키트](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r57-app-0.3.38/Lite2AirMouse-r57-Windows-x64.zip) |
-| Android에서 슬롯·감도·버튼 모니터 사용 | [Android 키트 (APK, ARM64 입력 도우미, Windows 시작 프로그램)](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r57-app-0.3.38/Lite2Control-0.3.38-Android-arm64.zip) |
-| 이미 도우미를 사용 중인 기기에서 앱만 설치 | [Lite 2 Control 0.3.38 APK](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r57-app-0.3.38/Lite2Control-0.3.38.apk) |
+| Lite 2 펌웨어 업데이트 | [Windows 업데이트 키트](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r58-app-0.3.38/Lite2AirMouse-r58-Windows-x64.zip) |
+| Android에서 슬롯·감도·버튼 모니터 사용 | [Android 키트 (APK, ARM64 입력 도우미, Windows 시작 프로그램)](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r58-app-0.3.38/Lite2Control-0.3.38-Android-arm64.zip) |
+| 이미 도우미를 사용 중인 기기에서 앱만 설치 | [Lite 2 Control 0.3.38 APK](https://github.com/parkwonkeun/8BitDo-Lite2-AirMouse/releases/download/r58-app-0.3.38/Lite2Control-0.3.38.apk) |
 
 ## 1. D 모드 USB로 펌웨어 업데이트
 
 1. **8BitDo Lite 2** 모델인지 확인합니다. Windows x64 PC에서 Windows 키트의 압축을 폴더에 모두 풉니다. 처음 실행할 때는 인터넷 연결이 필요합니다.
 2. 다른 8BitDo 패드를 분리하고, Lite 2 **상단 스위치를 D로 옮긴 다음** 데이터 전송이 되는 USB 케이블로 PC에 연결합니다. 이미 S로 꽂혀 있었다면 D로 바꾼 뒤 케이블을 다시 꽂습니다.
-3. 압축을 푼 폴더에서 **Update.cmd**를 실행합니다. 프로그램이 제조사 서버에서 순정 v1.06과 Windows 업데이트 구성 요소를 받아 SHA-256을 대조하고, 동봉된 변경분으로 r57 이미지를 만듭니다. Python을 설치할 필요는 없습니다.
-4. 프로그램이 D 모드 Lite 2 한 대를 찾으면 콘솔에 **R57**을 입력하고 Enter를 누릅니다. **Update complete**가 표시될 때까지 패드 전원과 케이블을 유지합니다. 이 메시지는 기록 진행률 100%와 재시작 후 D 모드 USB 응답까지 확인했다는 뜻입니다.
+3. 압축을 푼 폴더에서 **Update.cmd**를 실행합니다. 프로그램이 제조사 서버에서 순정 v1.06과 Windows 업데이트 구성 요소를 받아 SHA-256을 대조하고, 동봉된 변경분으로 r58 이미지를 만듭니다. Python을 설치할 필요는 없습니다.
+4. 프로그램이 D 모드 Lite 2 한 대를 찾으면 콘솔에 **R58**을 입력하고 Enter를 누릅니다. **Update complete**가 표시될 때까지 패드 전원과 케이블을 유지합니다. 이 메시지는 기록 진행률 100%와 재시작 후 D 모드 USB 응답까지 확인했다는 뜻입니다.
 5. 케이블을 뽑고 아래의 두 가지 블루투스 등록을 진행합니다.
 
 이 프로젝트는 8BitDo 비공식 펌웨어입니다. 기록 중 전원이 끊기면 패드가 시작되지 않을 수 있습니다. 공식 상태로 돌아갈 때는 제조사 업데이터에서 **Lite 2**용 공식 버전을 선택합니다. 이 프로젝트에서 순정으로 복구하는 전 과정은 실기 검증 전입니다. [8BitDo 공식 업데이터](https://support.8bitdo.com/firmware-updater.html)
@@ -28,7 +28,9 @@
 2. **S 모드**로 옮기고 HOME을 짧게 눌러 켭니다. 상단 페어링 버튼을 약 3초간 눌러 아래 LED 네 개가 함께 깜빡이면, **새 기기 페어링**에서 **Lite2 Air Mouse**를 선택합니다. 패드를 잠시 가만히 두었다가 돌려 포인터가 움직이는지 확인합니다.
 3. **D 모드**로 옮겨 상단 페어링 버튼을 다시 길게 누릅니다. 기기 목록에서 **Lite2 GamePAD**를 선택합니다. 게임이나 패드 테스트 앱에서 스틱과 방향키를 확인합니다. Lite 2 Control의 모니터를 열어 두었다면 먼저 설정 탭으로 이동하거나 앱 화면을 닫으세요.
 
-새로 등록한 두 항목은 모두 유지하세요. 이후 S·D 스위치를 바꾸면 해당 모드의 등록으로 다시 연결됩니다. r57의 무선 전원 종료는 HOME을 약 2초 누르도록 설정되어 있습니다.
+새로 등록한 두 항목은 모두 유지하세요. 이후 S·D 스위치를 바꾸면 해당 모드의 등록으로 다시 연결됩니다. HOME을 약 2초 누르면 수동으로 끌 수 있습니다.
+
+**r58 자동 종료** — S 마우스와 D 게임패드 모두 BLE 연결 후 버튼을 15분 동안 누르지 않으면 패드 전원이 꺼집니다. 버튼을 누르고 있는 동안에는 켜져 있고, 마지막 버튼을 놓으면 다시 15분을 셉니다. 방향키, LT·RT, L3·R3도 버튼으로 셉니다. 스틱을 계속 기울이거나 패드를 회전해도 시간은 계속 흐릅니다. 앱 없이도 동작하며, USB 사용 중에는 이 타이머로 전원을 끄지 않습니다.
 
 ## S 모드에서 패드 사용하기
 
@@ -83,6 +85,6 @@ Xbox·Switch·슬롯 1~3의 양쪽 스틱 기본 곡선은 데드존 10%, 최대
 
 ## 확인한 범위
 
-기기별 보정값을 유지한 r57을 Lite 2 한 대에 기록한 뒤 재시작과 D 모드 USB 응답을 확인했습니다. 공개 r57에는 기본 스틱 중립값이 들어 있으며 실행 코드는 실기 설치본과 같습니다. Android 앱 0.3.38은 Lenovo Legion Tab Y700 4세대에서 설치와 설정 화면을 확인했습니다.
+기기별 보정값을 유지한 r58을 Lite 2 한 대에 기록한 뒤 재시작과 D 모드 USB 응답을 확인했습니다. 공개 r58에는 기본 스틱 중립값이 들어 있습니다. 빌드한 r58 실행 코드에서 두 BLE 모드의 15분 경계, 버튼을 누르고 놓는 동작, USB 연결 및 재연결을 검사했습니다. Android 앱 0.3.38은 Lenovo Legion Tab Y700 4세대에서 설치와 설정 화면을 확인했습니다.
 
 펌웨어 소스는 `src/`, Android 앱과 입력 도우미는 `android/`, Windows 업데이터와 패키징 도구는 `tools/`에 있습니다. [빌드 절차와 해시](docs/BUILD.md)

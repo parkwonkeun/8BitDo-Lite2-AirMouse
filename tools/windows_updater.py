@@ -1,4 +1,4 @@
-"""Prepare the pinned r57 image and update one Lite 2 connected in D mode."""
+"""Prepare the pinned r58 image and update one Lite 2 connected in D mode."""
 import argparse
 from io import BytesIO
 import json
@@ -10,22 +10,22 @@ from tempfile import TemporaryDirectory
 import time
 from zipfile import ZipFile
 
-from release_inputs import BASE_SHA, BASE_URL, R57_SHA, UPDATER_SHA, UPDATER_URL, fetch, verify
+from release_inputs import BASE_SHA, BASE_URL, R58_SHA, UPDATER_SHA, UPDATER_URL, fetch, verify
 
 
 def prepare(cache, kit, destination):
     base = fetch(cache, 'Lite2-v1.06-official.dat', BASE_URL, BASE_SHA)
-    delta = json.loads((kit / 'r57.delta.json').read_text())
+    delta = json.loads((kit / 'r58.delta.json').read_text())
     image = bytearray(base)
     image.extend(bytes(delta['length'] - len(image)))
     for offset, value in delta['runs']:
         change = bytes.fromhex(value)
         image[offset:offset + len(change)] = change
-    verify(image, R57_SHA, 'reconstructed r57')
-    image_path = destination / 'Lite2AirMouse-r57.dat'
+    verify(image, R58_SHA, 'reconstructed r58')
+    image_path = destination / 'Lite2AirMouse-r58.dat'
     image_path.write_bytes(image)
     extract_vendor_tools(cache, destination)
-    print(f'r57 SHA-256 verified: {R57_SHA}', flush=True)
+    print(f'r58 SHA-256 verified: {R58_SHA}', flush=True)
     return image_path
 
 
@@ -56,7 +56,7 @@ def flash(image, helper):
     handle = open_unique(0x2dc8, 0x5112)
     try:
         print('One D-mode Lite 2 found. Keep the data cable connected until the check finishes.')
-        if input('Type R57 and press Enter to write the firmware: ').strip() != 'R57':
+        if input('Type R58 and press Enter to write the firmware: ').strip() != 'R58':
             print('Cancelled.')
             return
         packet = bytes.fromhex('81 05 00 51 00 00 00').ljust(64, b'\0')
@@ -67,7 +67,7 @@ def flash(image, helper):
     wait_for(r.paths, 'vid_2dc8&pid_3208')
     if len(r.paths('vid_2dc8&pid_3208')) != 1:
         raise RuntimeError('Expected exactly one bootloader')
-    subprocess.run([str(helper), '--flash', str(image), R57_SHA], cwd=image.parent, check=True)
+    subprocess.run([str(helper), '--flash', str(image), R58_SHA], cwd=image.parent, check=True)
     wait_for(r.paths, 'vid_2dc8&pid_5112')
     handle = open_unique(0x2dc8, 0x5112)
     try:
@@ -85,7 +85,7 @@ def main():
     parser.add_argument('--cache', type=Path, default=Path(os.environ['LOCALAPPDATA']) / 'Lite2AirMouse' / 'vendor')
     args = parser.parse_args()
     kit = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent
-    with TemporaryDirectory(prefix='lite2-r57-') as temporary:
+    with TemporaryDirectory(prefix='lite2-r58-') as temporary:
         directory = Path(temporary)
         image = prepare(args.cache, kit, directory)
         if args.prepare_only:
